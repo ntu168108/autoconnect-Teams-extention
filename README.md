@@ -1,0 +1,81 @@
+# Teams Auto-Joiner — bản cập nhật cho Microsoft Teams mới
+
+> 💡 **Lấy cảm hứng từ dự án gốc của TobiasPankner:**
+> **https://github.com/TobiasPankner/Teams-Auto-Joiner**
+>
+> Bản gốc không còn chạy được vì Microsoft đã thay đổi **hoàn toàn** giao diện Teams (sang "new Teams"). Dự án này viết lại để hoạt động trở lại với **Microsoft Teams phiên bản mới (2026)**, đồng thời thêm giao diện cấu hình bằng web. Xin cảm ơn tác giả **TobiasPankner** cho ý tưởng và nền tảng ban đầu.
+
+Script Python tự động **tham gia cuộc họp Microsoft Teams** giúp bạn — tự **tắt camera & micro** trước khi vào, có thể tự gửi lời nhắn và tự rời họp theo điều kiện.
+
+---
+
+## ✨ Tính năng
+- Tự đăng nhập, tự tìm cuộc họp trong **Lịch (Calendar)** hoặc **kênh (Channel)**.
+- Tự vào họp với **camera & mic đã tắt sẵn**.
+- (Tùy chọn) Tự **gửi lời nhắn** vào **chat phòng họp** khi vào.
+- (Tùy chọn) Tự **rời họp** sau X phút.
+- **Giao diện cấu hình bằng web**, có chế độ **Sáng / Tối** — không cần sửa file tay.
+
+## 📋 Yêu cầu
+- **Python 3.8+** — tải tại https://www.python.org/downloads/ (khi cài nhớ tick **“Add Python to PATH”**).
+- **Google Chrome** hoặc **Microsoft Edge** (hầu hết máy đã có sẵn).
+- Một tài khoản **Microsoft Teams**.
+
+## 🚀 Cài đặt & chạy
+1. **Cài thư viện** (chỉ làm một lần). Mở PowerShell trong thư mục này rồi gõ:
+   ```
+   pip install -r requirements.txt
+   ```
+2. **Double-click `run.bat`** để khởi động. *(Hoặc gõ `python auto_joiner.py`.)*
+3. Một **cửa sổ cấu hình** hiện ra trong trình duyệt → điền **Email / Mật khẩu**, chọn **Nguồn tìm cuộc họp**, bấm **▶ Bắt đầu**.
+4. Bot mở Chrome, đăng nhập và bắt đầu tự tìm + vào họp.
+   > ⚠️ **Đừng bấm gì vào cửa sổ Chrome đó** trong khi bot đang chạy.
+   > Nếu hiện yêu cầu xác thực (MFA / OTP), bạn tự hoàn tất trong cửa sổ đó — bot sẽ chờ.
+
+## ⚙️ Các tùy chọn cấu hình
+| Tùy chọn | Ý nghĩa |
+|---|---|
+| **Email / Mật khẩu** | Tài khoản Teams. Để trống thì bạn tự đăng nhập tay trong trình duyệt. |
+| **Nguồn tìm cuộc họp** | `Chỉ Lịch` (nhanh nhất) · `Chỉ Kênh` · `Cả hai`. |
+| **Chạy ẩn (headless)** | Chạy ngầm, không hiện cửa sổ trình duyệt. |
+| **Tắt loa trình duyệt** | Tắt âm thanh phát ra từ trình duyệt (không ảnh hưởng micro của bạn). |
+| **Tự rời họp sau (phút)** | `-1` = không tự rời (ở lại tới khi có họp mới). |
+| **Khoảng quét lại (giây)** | Bao lâu kiểm tra cuộc họp mới một lần. |
+| **Lời nhắn khi vào họp** | Tin tự gửi vào **chat phòng họp** (để trống = không gửi). |
+| **Discord webhook** | (Tùy chọn) gửi thông báo trạng thái qua Discord. |
+
+Các tùy chọn nâng cao khác (blacklist kênh, lọc theo regex tên họp, đa tổ chức…) có thể chỉnh trực tiếp trong `config.json` — xem `config.json.example` để biết đầy đủ.
+
+> 🔒 Cấu hình được lưu vào **`config.json`** (tạo tự động khi bạn bấm Bắt đầu).
+> **File này chứa mật khẩu của bạn — KHÔNG chia sẻ, KHÔNG đẩy lên GitHub.** Đã được `.gitignore` loại trừ sẵn.
+
+## 🔧 Cách hoạt động (tóm tắt)
+1. Mở Chrome qua **Selenium** → vào `teams.microsoft.com` → đăng nhập.
+2. Theo chu kỳ, **quét Lịch** (Outlook nhúng trong iframe) và/hoặc **các kênh** để tìm cuộc họp đang diễn ra.
+3. Thấy cuộc họp mới nhất → mở màn hình chờ (pre-join) → **tắt camera & micro** → bấm **Tham gia**.
+4. (Nếu đặt) gửi **lời nhắn** vào **chat phòng họp**.
+5. Tự rời họp theo điều kiện bạn cấu hình.
+
+## ❓ Khắc phục sự cố
+- **“Không tìm thấy Python”** → cài Python và tick *Add Python to PATH*, rồi chạy lại.
+- **Kẹt ở màn hình đăng nhập / MFA** → tự hoàn tất trong cửa sổ Chrome; bot chờ tối đa ~2,5 phút.
+- **Không tìm thấy cuộc họp trong Lịch** → cuộc họp chỉ tham gia được khi **đang/đến giờ**. Kiểm tra đúng tài khoản và cuộc họp là *Cuộc họp Microsoft Teams*.
+- **Nút bấm bị lỗi sau khi Teams cập nhật** → xem mục *Dành cho người phát triển* bên dưới.
+
+## 🛠️ Dành cho người phát triển
+Microsoft thường xuyên đổi giao diện Teams → có thể làm hỏng các *selector*. Khi đó dùng công cụ kèm theo để chụp lại cấu trúc DOM mới:
+```
+python inspect_teams.py
+```
+Đăng nhập, bấm tới màn hình cần, gõ **Enter** để lưu **HTML + ảnh chụp + danh sách nút bấm** (vào thư mục `dumps/`), rồi cập nhật selector trong `auto_joiner.py`.
+
+| File | Vai trò |
+|---|---|
+| `auto_joiner.py` | Bot chính (đăng nhập, tìm họp, vào họp, gửi lời nhắn). |
+| `setup_ui.py` | Giao diện web để cấu hình. |
+| `inspect_teams.py` | Công cụ chụp DOM (dùng khi Teams đổi giao diện). |
+| `run.bat` | Trình khởi động cho Windows (double-click là chạy). |
+| `config.json.example` | Mẫu cấu hình đầy đủ các tùy chọn. |
+
+## 🙏 Ghi nhận
+Dựa trên ý tưởng và mã nguồn ban đầu của **[TobiasPankner/Teams-Auto-Joiner](https://github.com/TobiasPankner/Teams-Auto-Joiner)**. Bản này cập nhật toàn bộ selector cho new Teams và bổ sung giao diện cấu hình.

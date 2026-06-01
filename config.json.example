@@ -1,0 +1,41 @@
+{
+  "email": "",
+  "password": "",
+
+  "run_at_time": "",
+
+  "meeting_mode": 1,
+  "organisation_num" : -1,
+  "random_delay": [0,0],
+  "check_interval": 10,
+
+  "join_message": "",
+
+  "auto_leave_after_min": -1,
+  "leave_if_last": false,
+  "leave_threshold_number": -1,
+  "leave_threshold_percentage": -1,
+  "pause_search": false,
+
+  "headless" : false,
+  "mute_audio": false,
+  "chrome_type": "google-chrome",
+
+  "blacklist": [
+    {
+      "team_name": "Example Team 1",
+      "channel_names": [
+        "First Channel to blacklist in this team",
+        "Second Channel to blacklist"
+      ]
+    },
+     {
+      "team_name": "Blacklist whole team",
+      "channel_names": [
+      ]
+    }
+  ],
+  "blacklist_meeting_re": "",
+
+  "discord_webhook_url" : ""
+}

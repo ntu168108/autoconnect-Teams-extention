@@ -1,0 +1,26 @@
+# ─── KHÔNG BAO GIỜ commit file này: nó chứa email + mật khẩu của bạn ───
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Selenium / hồ sơ trình duyệt & dữ liệu gỡ lỗi
+.debug_profile/
+debug/
+dumps/
+dumps.zip
+dumps_extracted/
+
+# Script gỡ lỗi tạm
+_*.py
+
+# Hệ điều hành / IDE
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
