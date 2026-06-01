@@ -17,20 +17,36 @@ Script Python tự động **tham gia cuộc họp Microsoft Teams** giúp bạn
 - **Giao diện cấu hình bằng web**, có chế độ **Sáng / Tối** — không cần sửa file tay.
 
 ## Yêu cầu
-- **Python 3.8+** — tải tại https://www.python.org/downloads/ (khi cài nhớ tick **"Add Python to PATH"**).
+- **Python 3.8+**
+  - Windows: tải tại https://www.python.org/downloads/ — nhớ tick **"Add Python to PATH"** khi cài.
+  - macOS: tải tại https://www.python.org/downloads/ hoặc chạy `brew install python`.
 - **Google Chrome** hoặc **Microsoft Edge** (hầu hết máy đã có sẵn).
 - Một tài khoản **Microsoft Teams**.
 
 ## Cài đặt & chạy
+
+### Windows
 1. **Cài thư viện** (chỉ làm một lần). Mở PowerShell trong thư mục này rồi gõ:
    ```
    pip install -r requirements.txt
    ```
-2. **Double-click `run.bat`** để khởi động. *(Hoặc gõ `python auto_joiner.py`.)*
+2. **Double-click `run.bat`** để khởi động.
 3. Một **cửa sổ cấu hình** hiện ra trong trình duyệt → điền **Email / Mật khẩu**, chọn **Nguồn tìm cuộc họp**, bấm **▶ Bắt đầu**.
 4. Bot mở Chrome, đăng nhập và bắt đầu tự tìm + vào họp.
-   > **Đừng bấm gì vào cửa sổ Chrome đó** trong khi bot đang chạy.
-   > Nếu hiện yêu cầu xác thực (MFA / OTP), bạn tự hoàn tất trong cửa sổ đó — bot sẽ chờ.
+
+### macOS
+1. **Cài thư viện** (chỉ làm một lần). Mở Terminal trong thư mục này rồi gõ:
+   ```
+   pip3 install -r requirements.txt
+   ```
+2. **Double-click `run.command`** trong Finder để khởi động.
+   - Script sẽ **tự kiểm tra** Python, các thư viện và trình duyệt trước khi chạy — nếu thiếu gì sẽ hiện hướng dẫn cụ thể.
+   - **Lần đầu chạy:** macOS có thể chặn vì file tải từ internet. Vào **System Settings → Privacy & Security**, kéo xuống tìm thông báo bị chặn và nhấn **"Open Anyway"**.
+3. Một **cửa sổ cấu hình** hiện ra trong trình duyệt → điền **Email / Mật khẩu**, chọn **Nguồn tìm cuộc họp**, bấm **▶ Bắt đầu**.
+4. Bot mở Chrome, đăng nhập và bắt đầu tự tìm + vào họp.
+
+> **Đừng bấm gì vào cửa sổ Chrome đó** trong khi bot đang chạy.
+> Nếu hiện yêu cầu xác thực (MFA / OTP), bạn tự hoàn tất trong cửa sổ đó — bot sẽ chờ.
 
 ## Các tùy chọn cấu hình
 | Tùy chọn | Ý nghĩa |
@@ -57,7 +73,9 @@ Các tùy chọn nâng cao khác (blacklist kênh, lọc theo regex tên họp, 
 5. Tự rời họp theo điều kiện bạn cấu hình.
 
 ## Khắc phục sự cố
-- **"Không tìm thấy Python"** → cài Python và tick *Add Python to PATH*, rồi chạy lại.
+- **"Không tìm thấy Python"** → cài Python và tick *Add Python to PATH* (Windows) hoặc `brew install python` (macOS), rồi chạy lại.
+- **macOS: "run.command không thể mở vì không xác định được nhà phát triển"** → vào **System Settings → Privacy & Security → Open Anyway**.
+- **macOS: "Package chưa được cài"** → mở Terminal, chạy `pip3 install -r requirements.txt` trong thư mục này.
 - **Kẹt ở màn hình đăng nhập / MFA** → tự hoàn tất trong cửa sổ Chrome; bot chờ tối đa ~2,5 phút.
 - **Không tìm thấy cuộc họp trong Lịch** → cuộc họp chỉ tham gia được khi **đang/đến giờ**. Kiểm tra đúng tài khoản và cuộc họp là *Cuộc họp Microsoft Teams*.
 - **Nút bấm bị lỗi sau khi Teams cập nhật** → xem mục *Dành cho người phát triển* bên dưới.
@@ -74,7 +92,8 @@ python inspect_teams.py
 | `auto_joiner.py` | Bot chính (đăng nhập, tìm họp, vào họp, gửi lời nhắn). |
 | `setup_ui.py` | Giao diện web để cấu hình. |
 | `inspect_teams.py` | Công cụ chụp DOM (dùng khi Teams đổi giao diện). |
-| `run.bat` | Trình khởi động cho Windows (double-click là chạy). |
+| `run.bat` | Trình khởi động cho **Windows** (double-click là chạy). |
+| `run.command` | Trình khởi động cho **macOS** (double-click là chạy, tự kiểm tra yêu cầu hệ thống). |
 | `config.json.example` | Mẫu cấu hình đầy đủ các tùy chọn. |
 
 ## Ghi nhận
