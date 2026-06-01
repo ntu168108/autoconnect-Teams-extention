@@ -22,6 +22,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import auto_joiner
+from selenium.webdriver.common.by import By
 
 DUMP_DIR = "dumps"
 
@@ -81,11 +82,36 @@ def capture(browser, n, label, outdir=DUMP_DIR):
     try:
         candidates = browser.execute_script(CANDIDATE_JS)
         report = {"url": browser.current_url, "title": browser.title,
-                  "candidate_count": len(candidates), "candidates": candidates}
+                  "candidate_count": len(candidates), "candidates": candidates,
+                  "iframes": []}
+
+        # The new Teams calendar is an Outlook page embedded in an iframe, so the
+        # event tiles and the Join button live INSIDE that iframe — scan each one.
+        try:
+            frames = browser.find_elements(By.CSS_SELECTOR, "iframe")
+        except Exception:
+            frames = []
+        for idx, fr in enumerate(frames):
+            try:
+                f_tid = fr.get_attribute("data-tid") or ""
+                f_title = fr.get_attribute("title") or ""
+                browser.switch_to.frame(fr)
+                sub = browser.execute_script(CANDIDATE_JS) or []
+            except Exception as e:
+                sub, f_tid, f_title = [], f"<err {e}>", ""
+            finally:
+                browser.switch_to.default_content()
+            if sub:
+                report["iframes"].append({
+                    "index": idx, "data_tid": f_tid, "title": f_title,
+                    "candidate_count": len(sub), "candidates": sub,
+                })
+
         with open(base + ".candidates.json", "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
         written.append(base + ".candidates.json")
-        print(f"  -> {len(candidates)} candidates found")
+        iframe_hits = sum(fr["candidate_count"] for fr in report["iframes"])
+        print(f"  -> {len(candidates)} candidates (top) + {iframe_hits} in iframes")
     except Exception as e:
         print(f"  ! candidate scan failed: {e}")
 

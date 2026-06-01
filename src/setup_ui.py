@@ -32,7 +32,8 @@ EXAMPLE_PATH = os.path.join(_ROOT, "config.json.example")
 DEFAULTS = {
     "email": "",
     "password": "",
-    "meeting_mode": 3,          # 3 = calendar only (fastest)
+    "meeting_mode": 1,          # 1 = both (channels + calendar); classes are usually channel meetings
+    "join_before_min": 2,       # vào lớp sớm mấy phút (0 = đúng giờ)
     "headless": False,
     "mute_audio": False,
     "auto_leave_after_min": -1,
@@ -178,7 +179,7 @@ SUCCESS_HTML = _doc(
     "<div class='card'><div class='done'>"
     "<div class='ok'>" + _icon("check") + "</div>"
     "<h1>Đã lưu cấu hình</h1>"
-    "<p>Bạn có thể đóng cửa sổ này và quay lại terminal —<br>bot đang khởi động.</p>"
+    "<p>Cửa sổ này sẽ tự đóng —<br>bot đang khởi động…</p>"
     "</div></div>"
     "<script>setTimeout(function(){try{window.close();}catch(e){}},1500);</script>"
 )
@@ -204,15 +205,16 @@ def _render_form(cfg):
     email = _esc(cfg.get("email", ""))
     password = _esc(cfg.get("password", ""))
     try:
-        mode = int(cfg.get("meeting_mode", 3) or 3)
+        mode = int(cfg.get("meeting_mode", 1) or 1)
     except (ValueError, TypeError):
-        mode = 3
+        mode = 1
 
     def ck(v):
         return "checked" if mode == v else ""
 
     ckhl = "checked" if cfg.get("headless") else ""
     ckma = "checked" if cfg.get("mute_audio") else ""
+    join_before = _esc(cfg.get("join_before_min", 2))
     auto_leave = _esc(cfg.get("auto_leave_after_min", -1))
     interval = _esc(cfg.get("check_interval", 10))
     join_msg = _esc(cfg.get("join_message", ""))
@@ -247,7 +249,7 @@ def _render_form(cfg):
         <span class="mode-ic">{_icon("calendar")}</span>
         <span class="mode-text">
           <span class="mode-title">Chỉ Lịch</span>
-          <span class="mode-sub">Nhanh nhất — thấy nút Join ngay trên lịch</span>
+          <span class="mode-sub">Nhanh — đọc giờ bạn ghi trên Lịch Outlook</span>
         </span>
       </label>
       <label class="mode">
@@ -255,7 +257,7 @@ def _render_form(cfg):
         <span class="mode-ic">{_icon("hash")}</span>
         <span class="mode-text">
           <span class="mode-title">Chỉ Kênh</span>
-          <span class="mode-sub">Quét từng kênh của từng team — chậm hơn</span>
+          <span class="mode-sub">Đọc giờ từ banner trong kênh — quét chậm hơn</span>
         </span>
       </label>
       <label class="mode">
@@ -263,10 +265,14 @@ def _render_form(cfg):
         <span class="mode-ic">{_icon("layers")}</span>
         <span class="mode-text">
           <span class="mode-title">Cả hai</span>
-          <span class="mode-sub">Lịch + Kênh</span>
+          <span class="mode-sub">Đọc giờ từ cả Lịch lẫn kênh — đầy đủ nhất</span>
         </span>
       </label>
     </div>
+
+    <label class="field">Vào lớp sớm mấy phút (0 = đúng giờ)
+      <input type="number" name="join_before_min" value="{join_before}" min="0">
+    </label>
 
     <div class="toggles">
       <label class="switch"><input type="checkbox" name="headless" {ckhl}>{_icon("eye-off")} Chạy ẩn (headless)</label>
@@ -337,7 +343,8 @@ class _Handler(BaseHTTPRequestHandler):
         cfg = dict(_Handler.config)  # preserve untouched keys (blacklist, etc.)
         cfg["email"] = g("email")
         cfg["password"] = g("password")
-        cfg["meeting_mode"] = as_int("meeting_mode", 3)
+        cfg["meeting_mode"] = as_int("meeting_mode", 1)
+        cfg["join_before_min"] = as_int("join_before_min", 2)
         cfg["headless"] = "headless" in form
         cfg["mute_audio"] = "mute_audio" in form
         cfg["auto_leave_after_min"] = as_int("auto_leave_after_min", -1)
@@ -354,8 +361,35 @@ class _Handler(BaseHTTPRequestHandler):
             _Handler.submitted.set()
 
 
-def _browser_path():
-    """Locate a Chromium-based browser (Chrome or Edge) for app-window mode."""
+def _find_browser():
+    """Locate a Chromium-based browser (Chrome / Edge / Chromium) for app-window
+    mode. Returns (launch_mode, path), or (None, None) if none is found.
+
+    launch_mode is "mac_app" (path is a .app bundle, launched via `open -na`)
+    or "exe" (path is an executable, launched directly)."""
+    # ── macOS ──────────────────────────────────────────────────────────────
+    if sys.platform == "darwin":
+        for app in [
+            "/Applications/Google Chrome.app",
+            "/Applications/Microsoft Edge.app",
+            "/Applications/Chromium.app",
+            os.path.expanduser("~/Applications/Google Chrome.app"),
+        ]:
+            if os.path.isdir(app):
+                return "mac_app", app
+        return None, None
+
+    # ── Linux ──────────────────────────────────────────────────────────────
+    if sys.platform.startswith("linux"):
+        import shutil
+        for name in ("google-chrome", "google-chrome-stable", "chromium",
+                     "chromium-browser", "microsoft-edge", "microsoft-edge-stable"):
+            p = shutil.which(name)
+            if p:
+                return "exe", p
+        return None, None
+
+    # ── Windows ────────────────────────────────────────────────────────────
     try:
         import winreg
         reg_keys = [
@@ -368,7 +402,7 @@ def _browser_path():
                 with winreg.OpenKey(hive, key) as k:
                     val, _ = winreg.QueryValueEx(k, None)
                     if val and os.path.exists(val):
-                        return val
+                        return "exe", val
             except OSError:
                 continue
     except Exception:
@@ -382,30 +416,67 @@ def _browser_path():
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
     ]:
         if os.path.exists(c):
-            return c
-    return None
+            return "exe", c
+    return None, None
 
 
 def _open_app_window(url):
     """Open the form in a dedicated Chrome/Edge app window (no tabs/address bar)."""
-    exe = _browser_path()
-    if not exe:
+    mode, path = _find_browser()
+    if not mode:
         return False
     import subprocess
     import tempfile
-    profile = os.path.join(tempfile.gettempdir(), "taj_setup_profile")
+    profile = os.path.join(tempfile.gettempdir(), _SETUP_PROFILE_MARKER)
+    flags = [
+        f"--app={url}",
+        f"--user-data-dir={profile}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--window-size=640,960",
+    ]
     try:
-        subprocess.Popen([
-            exe,
-            f"--app={url}",
-            f"--user-data-dir={profile}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--window-size=640,960",
-        ])
+        if mode == "mac_app":
+            # `open -na <App> --args ...` spawns a separate, foregrounded
+            # instance (the dedicated --user-data-dir keeps it isolated from
+            # the user's normal Chrome session).
+            subprocess.Popen(["open", "-na", path, "--args", *flags])
+        else:
+            subprocess.Popen([path, *flags])
         return True
     except Exception:
         return False
+
+
+# Unique marker in the setup window's command line (its --user-data-dir). Used
+# both to launch the isolated window and to find+close exactly that window later.
+_SETUP_PROFILE_MARKER = "taj_setup_profile"
+
+
+def _close_app_window():
+    """Close the dedicated setup browser window after the form is submitted.
+
+    `window.close()` from JS does not work for a Chrome `--app` window opened via
+    `open -na` on macOS, so we close it from the OS side instead. We match only
+    processes carrying our unique --user-data-dir marker, so the user's normal
+    browser windows are never touched."""
+    import subprocess
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process -Filter "
+                 f"\"CommandLine LIKE '%{_SETUP_PROFILE_MARKER}%'\" | "
+                 "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+                 "-ErrorAction SilentlyContinue }"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            # macOS / Linux: pkill matches the full command line (-f)
+            subprocess.run(["pkill", "-f", _SETUP_PROFILE_MARKER],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 
 def run_setup_gui(open_browser=True):
@@ -425,10 +496,12 @@ def run_setup_gui(open_browser=True):
     print(f"  Nếu không tự mở, hãy mở link này: {url}")
     print("=" * 62 + "\n")
 
+    opened_app = False
     if open_browser:
         # Prefer a dedicated Chrome/Edge app window (separate from the user's
         # normal browsing tabs); fall back to the default browser if not found.
-        if not _open_app_window(url):
+        opened_app = _open_app_window(url)
+        if not opened_app:
             try:
                 webbrowser.open(url)
             except Exception:
@@ -439,7 +512,12 @@ def run_setup_gui(open_browser=True):
     except KeyboardInterrupt:
         pass
     finally:
-        time.sleep(0.4)  # let the success response flush to the browser
+        # Keep the "Đã lưu" page visible briefly so the user sees the
+        # confirmation, then close the dedicated setup window automatically and
+        # let the bot start — no manual close needed.
+        time.sleep(1.2)
+        if opened_app:
+            _close_app_window()
         server.shutdown()
 
     return _Handler.result

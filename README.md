@@ -11,10 +11,13 @@ Script Python tự động **tham gia cuộc họp Microsoft Teams** giúp bạn
 
 ## Tính năng
 - Tự đăng nhập, tự tìm cuộc họp trong **Lịch (Calendar)** hoặc **kênh (Channel)**.
+- **Đếm ngược tới buổi học kế tiếp** ngay trên Terminal, **tự vào lớp sớm N phút** (bạn tự chọn; `0` = đúng giờ).
+  - Đọc **giờ** từ **banner cuộc họp trong kênh** *và* **sự kiện trên Lịch Outlook**, chọn buổi gần nhất.
 - Tự vào họp với **camera & mic đã tắt sẵn**.
 - (Tùy chọn) Tự **gửi lời nhắn** vào **chat phòng họp** khi vào.
 - (Tùy chọn) Tự **rời họp** sau X phút.
 - **Giao diện cấu hình bằng web**, có chế độ **Sáng / Tối** — không cần sửa file tay.
+- Hỗ trợ **Teams giao diện tiếng Việt** (nhận diện nút theo ID cố định + nhãn tiếng Việt).
 
 ## Yêu cầu
 - **Python 3.8+**
@@ -52,7 +55,8 @@ Script Python tự động **tham gia cuộc họp Microsoft Teams** giúp bạn
 | Tùy chọn | Ý nghĩa |
 |---|---|
 | **Email / Mật khẩu** | Tài khoản Teams. Để trống thì bạn tự đăng nhập tay trong trình duyệt. |
-| **Nguồn tìm cuộc họp** | `Chỉ Lịch` (nhanh nhất) · `Chỉ Kênh` · `Cả hai`. |
+| **Nguồn tìm cuộc họp** | `Chỉ Lịch` (nhanh — đọc giờ trên Lịch Outlook) · `Chỉ Kênh` (đọc banner trong kênh) · `Cả hai` (đầy đủ nhất). Chế độ nào cũng đếm ngược + tự vào lớp. |
+| **Vào lớp sớm (phút)** | Tự vào lớp trước giờ bắt đầu mấy phút (`0` = đúng giờ). Bot đếm ngược rồi vào. |
 | **Chạy ẩn (headless)** | Chạy ngầm, không hiện cửa sổ trình duyệt. |
 | **Tắt loa trình duyệt** | Tắt âm thanh phát ra từ trình duyệt (không ảnh hưởng micro của bạn). |
 | **Tự rời họp sau (phút)** | `-1` = không tự rời (ở lại tới khi có họp mới). |
@@ -67,10 +71,12 @@ Các tùy chọn nâng cao khác (blacklist kênh, lọc theo regex tên họp, 
 
 ## Cách hoạt động (tóm tắt)
 1. Mở Chrome qua **Selenium** → vào `teams.microsoft.com` → đăng nhập.
-2. Theo chu kỳ, **quét Lịch** (Outlook nhúng trong iframe) và/hoặc **các kênh** để tìm cuộc họp đang diễn ra.
-3. Thấy cuộc họp mới nhất → mở màn hình chờ (pre-join) → **tắt camera & micro** → bấm **Tham gia**.
-4. (Nếu đặt) gửi **lời nhắn** vào **chat phòng họp**.
-5. Tự rời họp theo điều kiện bạn cấu hình.
+2. **Dò lịch học**: đọc **giờ bắt đầu** từ banner cuộc họp trong **kênh** và sự kiện trên **Lịch Outlook**, gộp lại và chọn **buổi gần nhất**.
+3. **Đếm ngược** trên Terminal tới mốc *(giờ bắt đầu − số phút "vào sớm")*.
+4. Tới mốc đó → vào lớp; nếu giảng viên chưa mở thì **thử lại** tới khi vào được → mở màn hình chờ → **tắt camera & micro** → bấm **Tham gia**.
+5. (Nếu đặt) gửi **lời nhắn** vào **chat phòng họp**; tự rời theo điều kiện bạn cấu hình; xong thì quay lại đếm ngược buổi tiếp theo.
+
+> **Lưu ý:** Bot chỉ vào được lớp khi lớp **thực sự đang/đến giờ diễn ra**. Buổi học của bạn nên có mặt trong **kênh lớp** (hoặc bạn ghi giờ lên **Lịch Outlook**) để bot dò ra.
 
 ## Khắc phục sự cố
 - **"Không tìm thấy Python"** → cài Python và tick *Add Python to PATH* (Windows) hoặc `brew install python` (macOS), rồi chạy lại.

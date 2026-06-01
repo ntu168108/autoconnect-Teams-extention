@@ -4,7 +4,7 @@ import random
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Timer
 
 # When run as  python src/auto_joiner.py  from the repo root, the working
@@ -44,8 +44,12 @@ uuid_regex = r"\b[0-9a-f]{8}\b-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-\b[0-9a-f]{12
 
 # ── New-Teams selectors (all data-tid / data-inp / stable IDs) ────────────────
 SEL_PAGE_READY      = "[data-tid='all-phased-rendering-complete']"
-SEL_TEAMS_BTN       = "button[aria-label^='Teams']"
-SEL_CALENDAR_BTN    = "button[aria-label^='Calendar']"
+# App-bar buttons: match by the Teams app GUID first (fixed, language-independent),
+# then fall back to English/Vietnamese aria-labels for older/other tenants.
+SEL_TEAMS_BTN       = ("button[id='2a84919f-59d8-4441-a975-2a8c2643b741'],"
+                       "button[aria-label^='Teams'],button[aria-label^='Nhóm']")
+SEL_CALENDAR_BTN    = ("button[id='ef56c0de-36fc-4ef8-b417-3d82ba9d073c'],"
+                       "button[aria-label^='Calendar'],button[aria-label^='Lịch']")
 SEL_TEAMS_GRID      = "[data-tid='teams-grid-view']"
 SEL_TEAM_CARD       = "[data-tid$='-team-card']"
 SEL_CHANNEL_ITEM    = "[data-tid='channel-list-item']"
@@ -85,10 +89,13 @@ return false;
 """
 
 _JS_CLICK_JOIN = r"""
+// Calendar peek "Join" button. Match the exact label in English ("Join") or
+// Vietnamese ("Tham gia"). Exact-match avoids hitting the always-present toolbar
+// button "Tham gia bằng ID" (Join with an ID).
 var els=document.querySelectorAll('button,[role="button"],a,div[role="button"]');
 for(var i=0;i<els.length;i++){
-  var clean=(els[i].innerText||'').replace(/[^a-zA-Z ]/g,'').trim().toLowerCase();
-  if(clean==='join'){els[i].click();return true;}
+  var t=(els[i].innerText||els[i].textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
+  if(t==='join'||t==='tham gia'){els[i].click();return true;}
 }
 return false;
 """
@@ -314,8 +321,9 @@ def get_all_teams():
         if not thread_id:
             continue
         aria = card.get_attribute("aria-label") or ""
-        # aria-label is "TEAM_NAME Team X of Y" — strip the suffix
-        name = re.sub(r'\s+Team\s+\d+\s+of\s+\d+\s*$', '', aria).strip()
+        # aria-label is "TEAM_NAME Team X of Y" (EN) or "... Nhóm X của Y" (VI)
+        # — strip the trailing position suffix in either language.
+        name = re.sub(r'\s+(Team|Nhóm)\s+\d+\s+(of|của)\s+\d+\s*$', '', aria).strip()
         if not name:
             name = thread_id
         teams.append(Team(name, thread_id))
@@ -798,6 +806,331 @@ def handle_leave_threshold(current_members, total):
     return False
 
 
+# ── Schedule countdown & auto-join ────────────────────────────────────────────
+
+# Channel meeting banner aria-label (Vietnamese) looks like:
+#   "Cuộc họp đã lên lịch. <TÊN>. Thứ Hai, 9 tháng 2, 2026 12:30. Nhấn enter…"
+# The schedule datetime is the "<day> tháng <month>, <year> <H>:<MM>" part. The
+# regex anchors on "tháng" + a trailing H:MM so it never matches a date that may
+# be embedded in the title (e.g. "Ngày 03.02.2026" / "Lúc 07h15").
+_BANNER_DT_RE = re.compile(r'(\d{1,2})\s+tháng\s+(\d{1,2}),\s*(\d{4})\s+(\d{1,2}):(\d{2})')
+
+
+def _parse_banner_time(aria):
+    """Return a datetime for a scheduled-meeting banner aria-label, or None."""
+    m = _BANNER_DT_RE.search(aria or "")
+    if not m:
+        return None
+    day, month, year, hour, minute = (int(x) for x in m.groups())
+    try:
+        return datetime(year, month, day, hour, minute)
+    except ValueError:
+        return None
+
+
+def _fmt_td(td):
+    """Format a timedelta as HH:MM:SS (or 'N ngày HH:MM:SS')."""
+    total = max(int(td.total_seconds()), 0)
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    if days:
+        return f"{days} ngày {hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def discover_scheduled_meetings():
+    """Scan every (non-blacklisted) channel of every team and parse the start
+    time of any scheduled-meeting banner found. Returns a de-duplicated list of
+    dicts: {start, title, team_id, channel_id}."""
+    found = {}
+    teams = get_all_teams()
+    for team in teams:
+        switch_to_teams_tab()
+        card = wait_until_found(
+            f"[data-tid='{team.t_id}-team-card']", 5, print_error=False)
+        if card is None:
+            continue
+        try:
+            browser.execute_script("arguments[0].click()", card)
+        except Exception:
+            continue
+        time.sleep(2)
+
+        team.channels = _get_channels_from_sidebar(team)
+        team.check_blacklist()
+
+        for ch in team.channels:
+            if ch.blacklisted:
+                continue
+            ch_btn = wait_until_found(
+                f"[data-tid='channel-list-item-text-{ch.c_id}']", 3, print_error=False)
+            if ch_btn is None:
+                continue
+            try:
+                browser.execute_script("arguments[0].click()", ch_btn)
+                time.sleep(1.5)
+            except Exception:
+                continue
+
+            for banner in browser.find_elements(By.CSS_SELECTOR, SEL_MEETING_BANNER):
+                try:
+                    aria = banner.get_attribute("aria-label") or ""
+                except Exception:
+                    continue
+                start = _parse_banner_time(aria)
+                if start is None:
+                    continue
+                key = (ch.c_id, start.isoformat())
+                found[key] = {
+                    "start": start,
+                    "title": f"{team.name} → {ch.name}",
+                    "team_id": team.t_id,
+                    "channel_id": ch.c_id,
+                }
+
+    switch_to_teams_tab()
+    return list(found.values())
+
+
+# Outlook-calendar event aria-labels (Vietnamese) look like:
+#   "môn toán, 5:02 CH đến 5:32 CH, Thứ Hai, Tháng 6 01, 2026, Busy"
+# Note the calendar differs from the channel banner: the time is 12-hour with
+# SA (AM) / CH (PM), and the date is "Tháng <month> <day>, <year>" (month first).
+_CAL_TIME_RE = re.compile(r'(\d{1,2}):(\d{2})\s*(SA|CH)')
+_CAL_DATE_RE = re.compile(r'Tháng\s+(\d{1,2})\s+(\d{1,2}),\s*(\d{4})')
+
+# Every aria-label on the calendar that carries a clock time (HH:MM).
+_CAL_EVENTS_JS = r"""
+var out=[], seen={};
+document.querySelectorAll('[aria-label]').forEach(function(e){
+  var al=e.getAttribute('aria-label')||'';
+  if(/\d{1,2}:\d{2}/.test(al) && al.length>12 && !seen[al]){seen[al]=1; out.push(al.slice(0,220));}
+});
+return out.slice(0,120);
+"""
+
+# Calendar aria-labels that are markers, not real events.
+_CAL_SKIP = ("ngoài giờ làm việc", "thời gian hiện tại", "kế hoạch công việc",
+             "dạng xem lịch")
+
+
+def _parse_calendar_time(aria):
+    """Return the start datetime of an Outlook-calendar event aria-label, or None."""
+    tm = _CAL_TIME_RE.search(aria or "")
+    dm = _CAL_DATE_RE.search(aria or "")
+    if not tm or not dm:
+        return None
+    hour, minute, ampm = int(tm.group(1)), int(tm.group(2)), tm.group(3)
+    if ampm == "CH" and hour != 12:      # PM
+        hour += 12
+    elif ampm == "SA" and hour == 12:    # 12 AM = midnight
+        hour = 0
+    month, day, year = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
+    try:
+        return datetime(year, month, day, hour, minute)
+    except ValueError:
+        return None
+
+
+def _discover_calendar_events():
+    """Read class times the user put on the Outlook calendar. Returns
+    [{start, title, source:'calendar'}] (no channel — these are time markers;
+    the actual class is joined via its channel)."""
+    out = []
+    switch_to_calendar_tab()
+    time.sleep(3)
+    iframe = wait_until_found(SEL_CAL_IFRAME, 15, print_error=False)
+    if iframe is None:
+        return out
+
+    browser.switch_to.frame(iframe)
+    labels = []
+    try:
+        deadline = time.time() + 25
+        while time.time() < deadline:
+            try:
+                n = browser.execute_script(
+                    'return document.querySelectorAll(\'button,[role="button"]\').length;') or 0
+                labels = browser.execute_script(_CAL_EVENTS_JS) or []
+            except Exception:
+                n, labels = 0, []
+            if n > 30 and labels:
+                break
+            time.sleep(1.5)
+    finally:
+        browser.switch_to.default_content()
+
+    for al in labels:
+        low = al.lower()
+        if any(s in low for s in _CAL_SKIP):
+            continue
+        start = _parse_calendar_time(al)
+        if start is None:
+            continue
+        title = al.split(",")[0].strip()
+        # Skip time-block / "working hours" / selection markers: those have no
+        # real title (their first segment is itself a time, e.g. "6:00 CH đến …").
+        if not title or _CAL_TIME_RE.match(title):
+            continue
+        out.append({"start": start, "title": title, "source": "calendar"})
+    return out
+
+
+def _join_live_channel_meeting():
+    """At class time, scan the channels for a meeting that is open right now and
+    join it. Used for calendar-sourced class times (which carry no channel)."""
+    global meetings
+    meetings = []
+    teams = get_all_teams()
+    if teams:
+        get_meetings(teams)
+    to_join = decide_meeting()
+    if to_join is not None:
+        join_meeting(to_join)
+    return current_meeting is not None
+
+
+def _countdown_until(meeting, join_at, max_seconds):
+    """Print a live one-line countdown to join_at. Returns True when join_at is
+    reached, or False once max_seconds elapse (caller should then re-scan)."""
+    end = time.time() + max_seconds
+    while time.time() < end:
+        now = datetime.now()
+        if now >= join_at:
+            sys.stdout.write("\n")
+            return True
+        remain = join_at - now
+        line = (f"\r⏳ {meeting['title']} | bắt đầu {meeting['start']:%H:%M %d/%m}"
+                f" | còn {_fmt_td(remain)} | tự vào lúc {join_at:%H:%M}      ")
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        time.sleep(1)
+    sys.stdout.write("\n")
+    return False
+
+
+def _stay_until_meeting_ends():
+    """Block while in a meeting; return when the call ends. Honors the optional
+    'leave_if_last' / leave-threshold settings while in the call."""
+    global current_meeting, total_members
+    interval = max(int(config.get('check_interval', 10) or 10), 3)
+    total_members = 0
+    count = 0
+    while current_meeting is not None:
+        if wait_until_found(SEL_HANGUP, 5, print_error=False) is None:
+            print("Đã rời lớp / lớp đã kết thúc.")
+            current_meeting = None
+            return
+        if config.get('leave_if_last'):
+            members = get_meeting_members()
+            if current_meeting is None:
+                return
+            if members and members > total_members:
+                total_members = members
+            if count % 5 == 0 and count > 0 and members is not None:
+                if handle_leave_threshold(members, total_members):
+                    return
+        count += 1
+        time.sleep(interval)
+
+
+def run_schedule_loop():
+    """Main loop for channel-based classes: discover scheduled meetings, show a
+    countdown to the next one, then auto-join it `join_before_min` minutes early
+    (retrying until the meeting is actually open)."""
+    global current_meeting
+
+    join_before = max(int(config.get('join_before_min', 2) or 0), 0)
+    rescan_seconds = max(int(config.get('rescan_min', 10) or 10), 1) * 60
+    print(f"Chế độ đếm ngược: tự vào lớp sớm {join_before} phút trước giờ bắt đầu.")
+
+    # Sessions already attended (or attempted) this run, so we don't keep
+    # re-joining the class we just left. Keyed by (channel_id, start time).
+    handled = set()
+
+    def _key(m):
+        return (m.get("channel_id") or m.get("title"), m["start"].isoformat())
+
+    while True:
+        print("\nĐang dò lịch học… chờ chút")
+        schedule = []
+        if mode != 3:   # mode 1 (cả hai) / 2 (chỉ kênh) → quét banner trong kênh
+            try:
+                schedule += discover_scheduled_meetings()
+            except Exception as e:
+                print(f"Lỗi khi dò kênh: {e}")
+        if mode != 2:   # mode 1 (cả hai) / 3 (chỉ lịch) → đọc sự kiện trên Lịch Outlook
+            try:
+                schedule += _discover_calendar_events()
+            except Exception as e:
+                print(f"Lỗi khi đọc lịch: {e}")
+
+        # Khử trùng theo giờ bắt đầu; ưu tiên mục có kênh (vào lớp chính xác hơn).
+        by_start = {}
+        for m in schedule:
+            k = m["start"].isoformat()
+            if k not in by_start or (m.get("channel_id") and not by_start[k].get("channel_id")):
+                by_start[k] = m
+        schedule = list(by_start.values())
+
+        now = datetime.now()
+        # Keep upcoming meetings, plus ones that started within the last 3h (a
+        # class may still be ongoing). Channels also keep past sessions — ignore
+        # those, and ignore any session we have already handled this run.
+        upcoming = sorted(
+            (m for m in schedule
+             if m["start"] >= now - timedelta(hours=3) and _key(m) not in handled),
+            key=lambda m: m["start"])
+
+        if not upcoming:
+            mins = rescan_seconds // 60
+            print(f"Chưa thấy buổi học sắp tới. Quét lại sau {mins} phút.")
+            time.sleep(rescan_seconds)
+            continue
+
+        nxt = upcoming[0]
+        join_at = nxt["start"] - timedelta(minutes=join_before)
+        print(f"Buổi kế tiếp: {nxt['title']} — bắt đầu {nxt['start']:%H:%M %d/%m}")
+
+        # Count down (re-scanning periodically in case the schedule changes).
+        if not _countdown_until(nxt, join_at, rescan_seconds):
+            continue  # window elapsed without reaching join time → re-scan
+
+        # ── Time to join ───────────────────────────────────────────────────
+        handled.add(_key(nxt))  # don't re-pick this session after we leave it
+        print(f"\n⏰ Tới giờ vào lớp: {nxt['title']}")
+        discord_notification("Tới giờ vào lớp", nxt["title"])
+
+        # Retry until joined or 15 min past the scheduled start (the teacher may
+        # open the meeting a little late). A channel-sourced item knows its exact
+        # channel; a calendar-sourced item only knows the time, so we scan the
+        # channels for whatever class is open right now.
+        deadline = nxt["start"] + timedelta(minutes=15)
+        while datetime.now() < deadline and current_meeting is None:
+            if nxt.get("channel_id"):
+                join_meeting(Meeting(
+                    m_id=f"channel:{nxt['channel_id']}",
+                    time_started=int(time.time()),
+                    title=nxt["title"],
+                    calendar_meeting=False,
+                    channel_id=nxt["channel_id"],
+                    team_id=nxt["team_id"],
+                ))
+            else:
+                _join_live_channel_meeting()
+            if current_meeting is not None:
+                break
+            print("Lớp chưa mở để vào — thử lại sau 20 giây…")
+            time.sleep(20)
+
+        if current_meeting is None:
+            print("Không vào được lớp (quá giờ). Tìm buổi tiếp theo.")
+            continue
+
+        _stay_until_meeting_ends()
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -862,70 +1195,11 @@ def main():
 
     time.sleep(5)
 
-    check_interval = max(config.get('check_interval', 10), 2)
-    interval_count = 0
-
-    while True:
-        ts = datetime.now()
-
-        # While in a meeting, NEVER switch tabs to search — switching to Calendar
-        # or Teams minimises the active call in new Teams.  Only search when idle.
-        in_meeting = current_meeting is not None
-
-        if in_meeting:
-            print(f"\n[{ts:%H:%M:%S}] In meeting: {current_meeting.title} — not switching tabs")
-        else:
-            print(f"\n[{ts:%H:%M:%S}] Looking for meetings")
-
-            if mode != 3:
-                teams = get_all_teams()
-                if not teams:
-                    print("No teams found — ensure Teams is in grid view")
-                    discord_notification("No teams found",
-                                         "ensure Teams is in grid/list view")
-                else:
-                    print()
-                    for t in teams:
-                        print(t)
-                    get_meetings(teams)
-
-            if mode != 2:
-                get_calendar_meetings()
-
-            if meetings:
-                print("Found meetings:")
-                for m in meetings:
-                    print(m)
-                to_join = decide_meeting()
-                if to_join is not None:
-                    total_members = 0
-                    join_meeting(to_join)
-
-        meetings = []
-        members_count = None
-
-        # Only open the People panel when leave_if_last is actually enabled —
-        # opening it every cycle clicks the People button and disrupts the meeting UI.
-        if in_meeting and config.get('leave_if_last'):
-            members_count = get_meeting_members()
-            if current_meeting is None:
-                continue
-            if members_count and members_count > total_members:
-                total_members = members_count
-
-            if (interval_count % 5 == 0 and interval_count > 0
-                    and members_count is not None and total_members is not None):
-                if handle_leave_threshold(members_count, total_members):
-                    total_members = None
-
-        # If meeting ended externally (host ended call), detect via hangup button gone
-        if in_meeting and current_meeting is not None:
-            if wait_until_found(SEL_HANGUP, 2, print_error=False) is None:
-                print("Meeting appears to have ended")
-                current_meeting = None
-
-        interval_count += 1
-        time.sleep(check_interval)
+    # Every mode uses the countdown loop: it reads each class's start time (from
+    # the channel banner and/or the Outlook calendar depending on the mode),
+    # shows a live countdown, and auto-joins `join_before_min` minutes early.
+    #   mode 1 = both sources · mode 2 = channels only · mode 3 = calendar only.
+    run_schedule_loop()
 
 
 if __name__ == "__main__":
