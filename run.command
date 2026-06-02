@@ -28,26 +28,18 @@ else
     ok "Python: $PY_VER"
 fi
 
-# 2. pip packages
+# 2. Thu vien Python — tu cai neu thieu (chi lan dau)
 if [ -n "$PY" ]; then
-    for pkg in selenium discord requests; do
-        if "$PY" -c "import $pkg" 2>/dev/null; then
-            VER=$("$PY" -c "import importlib.metadata; print(importlib.metadata.version('$pkg'))" 2>/dev/null || echo "?")
-            ok "Package '$pkg' ($VER)"
+    if "$PY" -c "import selenium, requests; from discord import SyncWebhook" 2>/dev/null; then
+        ok "Thu vien Python: day du"
+    else
+        warn "Thieu thu vien — dang tu cai (lan dau, vui long doi)..."
+        "$PY" -m pip install -r requirements.txt
+        if "$PY" -c "import selenium, requests; from discord import SyncWebhook" 2>/dev/null; then
+            ok "Da cai thu vien xong"
         else
-            fail "Package '$pkg' chua duoc cai."
-            echo "       -> Chay lenh: $PY -m pip install -r requirements.txt"
-            FAILED=1
+            fail "Cai thu vien that bai. Thu chay tay: $PY -m pip install -r requirements.txt"
         fi
-    done
-fi
-
-# discord.py import khac voi ten package 'discord'
-if [ -n "$PY" ]; then
-    if ! "$PY" -c "from discord import SyncWebhook" 2>/dev/null; then
-        fail "discord.py chua cai dung (thieu SyncWebhook — can discord.py >= 2.0)"
-        echo "       -> Chay lenh: $PY -m pip install 'discord.py>=2.3.0'"
-        FAILED=1
     fi
 fi
 
