@@ -1009,21 +1009,40 @@ def _join_live_channel_meeting():
 
 
 def _countdown_until(meeting, join_at, max_seconds):
-    """Print a live one-line countdown to join_at. Returns True when join_at is
-    reached, or False once max_seconds elapse (caller should then re-scan)."""
+    """Count down to join_at. Returns True when join_at is reached, or False once
+    max_seconds elapse (caller should then re-scan).
+
+    In a real terminal it updates ONE line in place via a carriage return. The
+    line is kept short and padded to a fixed width so it overwrites cleanly
+    without wrapping (which is what caused the per-second "spam") and without
+    ANSI codes, so it works the same on macOS Terminal and Windows cmd/PowerShell.
+    When output is redirected to a file it prints sparsely (every 20 s) instead."""
     end = time.time() + max_seconds
+    title = (meeting.get("title") or "Buổi học")[:20]
+    live = sys.stdout.isatty()
+    last_log = 0.0
     while time.time() < end:
         now = datetime.now()
         if now >= join_at:
-            sys.stdout.write("\n")
+            if live:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
             return True
         remain = join_at - now
-        line = (f"\r⏳ {meeting['title']} | bắt đầu {meeting['start']:%H:%M %d/%m}"
-                f" | còn {_fmt_td(remain)} | tự vào lúc {join_at:%H:%M}      ")
-        sys.stdout.write(line)
+        if live:
+            line = f"\r⏳ {title} · còn {_fmt_td(remain)} · vào {join_at:%H:%M}"
+            sys.stdout.write(line.ljust(57))   # fixed width clears leftovers, no wrap
+            sys.stdout.flush()
+            time.sleep(1)
+        else:
+            if time.time() - last_log >= 20:
+                print(f"[{now:%H:%M:%S}] {title} · còn {_fmt_td(remain)}"
+                      f" · tự vào {join_at:%H:%M}")
+                last_log = time.time()
+            time.sleep(1)
+    if live:
+        sys.stdout.write("\n")
         sys.stdout.flush()
-        time.sleep(1)
-    sys.stdout.write("\n")
     return False
 
 
