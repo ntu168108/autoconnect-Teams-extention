@@ -81,21 +81,34 @@ return out;
 """
 
 _JS_CLICK_EVENT = r"""
+// Click a calendar event. `want` is the event title; an event's aria-label
+// reads "<title>, <time> đến <time>, <date>, …", so match exact, then by the
+// title as a prefix, then anywhere.
 var want=arguments[0];
-var els=document.querySelectorAll('button,[role="button"],div[role="button"]');
+var els=document.querySelectorAll('button,[role="button"],div[role="button"],[aria-label]');
 for(var i=0;i<els.length;i++){if((els[i].getAttribute('aria-label')||'')===want){els[i].click();return true;}}
-for(var i=0;i<els.length;i++){var al=els[i].getAttribute('aria-label')||'';if(al && want.indexOf(al)===0){els[i].click();return true;}}
+for(var i=0;i<els.length;i++){var al=els[i].getAttribute('aria-label')||'';if(al && want && al.indexOf(want)===0){els[i].click();return true;}}
+for(var i=0;i<els.length;i++){var al=els[i].getAttribute('aria-label')||'';if(al && want && al.indexOf(want)>=0){els[i].click();return true;}}
 return false;
 """
 
 _JS_CLICK_JOIN = r"""
-// Calendar peek "Join" button. Match the exact label in English ("Join") or
-// Vietnamese ("Tham gia"). Exact-match avoids hitting the always-present toolbar
-// button "Tham gia bằng ID" (Join with an ID).
+// Click the calendar peek's Join button. The real one has aria-label
+// "Tham gia cuộc họp Teams" (or "Join …meeting"); its visible text is often just
+// an icon. We must NOT hit the toolbar's "Tham gia bằng ID" (Join with an ID).
+function clean(s){return (s||'').replace(/[-]/g,'').replace(/\s+/g,' ').trim().toLowerCase();}
 var els=document.querySelectorAll('button,[role="button"],a,div[role="button"]');
+// 1) Preferred: the explicit "join the Teams meeting" button, by aria-label.
 for(var i=0;i<els.length;i++){
-  var t=(els[i].innerText||els[i].textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
-  if(t==='join'||t==='tham gia'){els[i].click();return true;}
+  var al=clean(els[i].getAttribute('aria-label'));
+  if(al.indexOf('tham gia cuộc họp')>=0 || (al.indexOf('join')>=0 && al.indexOf('meeting')>=0)){
+    els[i].click();return true;}
+}
+// 2) Fallback: a control whose label is exactly "Tham gia" / "Join".
+for(var i=0;i<els.length;i++){
+  var t=clean(els[i].innerText||els[i].textContent);
+  var al2=clean(els[i].getAttribute('aria-label'));
+  if(t==='tham gia'||t==='join'||al2==='tham gia'||al2==='join'){els[i].click();return true;}
 }
 return false;
 """
@@ -561,11 +574,15 @@ def _open_calendar_meeting(meeting):
         if not browser.execute_script(_JS_CLICK_EVENT, label):
             print(f"Could not open calendar event: {meeting.title}")
             return False
-        time.sleep(2.5)  # wait for the peek/callout to render
-        if not browser.execute_script(_JS_CLICK_JOIN):
-            print("Could not find the Join button in the calendar peek")
-            return False
-        return True
+        # The peek/callout renders asynchronously — poll up to ~14s for its
+        # "Tham gia cuộc họp Teams" button instead of a single fixed wait.
+        time.sleep(2)
+        for _ in range(6):
+            if browser.execute_script(_JS_CLICK_JOIN):
+                return True
+            time.sleep(2)
+        print("Could not find the Join button in the calendar peek")
+        return False
     finally:
         browser.switch_to.default_content()
 
@@ -1109,6 +1126,7 @@ def run_schedule_loop():
         deadline = nxt["start"] + timedelta(minutes=15)
         while datetime.now() < deadline and current_meeting is None:
             if nxt.get("channel_id"):
+                # Channel-sourced: navigate to that channel and click its Join.
                 join_meeting(Meeting(
                     m_id=f"channel:{nxt['channel_id']}",
                     time_started=int(time.time()),
@@ -1118,7 +1136,14 @@ def run_schedule_loop():
                     team_id=nxt["team_id"],
                 ))
             else:
-                _join_live_channel_meeting()
+                # Calendar-sourced: open the meeting ON THE CALENDAR and click
+                # "Tham gia" (the user's classes are Teams meetings on the calendar).
+                join_meeting(Meeting(
+                    m_id=f"calendar:{nxt['title']}@{nxt['start'].isoformat()}",
+                    time_started=int(time.time()),
+                    title=nxt["title"],
+                    calendar_meeting=True,
+                ))
             if current_meeting is not None:
                 break
             print("Lớp chưa mở để vào — thử lại sau 20 giây…")
