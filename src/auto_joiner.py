@@ -37,6 +37,7 @@ config = None
 meetings = []
 current_meeting = None
 already_joined_ids = []
+_handled = set()              # class sessions already joined/attempted this run
 hangup_thread: Timer = None
 mode = 3
 channel_to_team = {}          # {channel_thread_id: team_thread_id}
@@ -1021,6 +1022,7 @@ def _countdown_until(meeting, join_at, max_seconds):
     title = (meeting.get("title") or "Buổi học")[:20]
     live = sys.stdout.isatty()
     last_log = 0.0
+    ticks = 0
     while time.time() < end:
         now = datetime.now()
         if now >= join_at:
@@ -1028,6 +1030,12 @@ def _countdown_until(meeting, join_at, max_seconds):
                 sys.stdout.write("\n")
                 sys.stdout.flush()
             return True
+        # The countdown itself makes no browser calls, so check every ~10s that
+        # Chrome is still open; if the user closed it, raise so the bot can stop
+        # cleanly now instead of counting down to the end first.
+        ticks += 1
+        if ticks % 10 == 0:
+            browser.title  # raises InvalidSessionIdException if Chrome is gone
         remain = join_at - now
         if live:
             line = f"\r⏳ {title} · còn {_fmt_td(remain)} · vào {join_at:%H:%M}"
@@ -1081,10 +1089,8 @@ def run_schedule_loop():
     rescan_seconds = max(int(config.get('rescan_min', 10) or 10), 1) * 60
     print(f"Chế độ đếm ngược: tự vào lớp sớm {join_before} phút trước giờ bắt đầu.")
 
-    # Sessions already attended (or attempted) this run, so we don't keep
-    # re-joining the class we just left. Keyed by (channel_id, start time).
-    handled = set()
-
+    # Sessions already attended (or attempted), so we don't keep re-joining the
+    # class we just left. Module-level so it survives a browser restart.
     def _key(m):
         return (m.get("channel_id") or m.get("title"), m["start"].isoformat())
 
@@ -1116,7 +1122,7 @@ def run_schedule_loop():
         # those, and ignore any session we have already handled this run.
         upcoming = sorted(
             (m for m in schedule
-             if m["start"] >= now - timedelta(hours=3) and _key(m) not in handled),
+             if m["start"] >= now - timedelta(hours=3) and _key(m) not in _handled),
             key=lambda m: m["start"])
 
         if not upcoming:
@@ -1134,7 +1140,7 @@ def run_schedule_loop():
             continue  # window elapsed without reaching join time → re-scan
 
         # ── Time to join ───────────────────────────────────────────────────
-        handled.add(_key(nxt))  # don't re-pick this session after we leave it
+        _handled.add(_key(nxt))  # don't re-pick this session after we leave it
         print(f"\n⏰ Tới giờ vào lớp: {nxt['title']}")
         discord_notification("Tới giờ vào lớp", nxt["title"])
 
@@ -1175,45 +1181,47 @@ def run_schedule_loop():
         _stay_until_meeting_ends()
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Browser lifecycle / login ─────────────────────────────────────────────────
 
-def main():
-    global config, meetings, mode, total_members, current_meeting
+def _browser_dead(e):
+    """True if the exception means the Chrome session is gone (window closed,
+    crashed, or DevTools disconnected) — i.e. we must reopen the browser."""
+    if isinstance(e, (exceptions.InvalidSessionIdException,
+                      exceptions.NoSuchWindowException)):
+        return True
+    if isinstance(e, exceptions.WebDriverException):
+        msg = (getattr(e, "msg", None) or str(e) or "").lower()
+        return any(k in msg for k in (
+            "invalid session id", "no such window", "disconnected",
+            "not connected to devtools", "target window already closed",
+            "chrome not reachable", "browser has closed", "session deleted"))
+    return False
 
-    mode = config.get("meeting_mode", 1)
-    if not (0 < mode < 4):
-        mode = 1
 
-    email    = config.get('email', '')
-    password = config.get('password', '')
-
-    if not email:
-        email = input('Email: ')
-    if not password:
-        password = getpass('Password: ')
-
+def open_and_login(email, password):
+    """Open Chrome, go to Teams, log in with the given credentials, and wait
+    until the Teams app is ready. Reused for the first launch and for restarts."""
     init_browser()
     browser.get("https://teams.microsoft.com")
 
-    # Login
     if email and password:
-        login_email = wait_until_found("input[type='email']", 30)
-        if login_email:
-            login_email.send_keys(email)
-        login_email = wait_until_found("input[type='email']", 5)
-        if login_email:
-            login_email.send_keys(Keys.ENTER)
+        e = wait_until_found("input[type='email']", 30)
+        if e:
+            e.send_keys(email)
+        e = wait_until_found("input[type='email']", 5)
+        if e:
+            e.send_keys(Keys.ENTER)
 
-        login_pwd = wait_until_found("input[type='password']", 10)
-        if login_pwd:
-            login_pwd.send_keys(password)
-        login_pwd = wait_until_found("input[type='password']", 5)
-        if login_pwd:
-            login_pwd.send_keys(Keys.ENTER)
+        p = wait_until_found("input[type='password']", 10)
+        if p:
+            p.send_keys(password)
+        p = wait_until_found("input[type='password']", 5)
+        if p:
+            p.send_keys(Keys.ENTER)
 
-        keep_logged_in = wait_until_found("input[id='idBtn_Back']", 5)
-        if keep_logged_in:
-            keep_logged_in.click()
+        keep = wait_until_found("input[id='idBtn_Back']", 5)
+        if keep:
+            keep.click()
             discord_notification("Logged in successfully", " ")
         else:
             print("Login may have failed — check config.json credentials")
@@ -1234,15 +1242,36 @@ def main():
         if retry:
             retry.click()
         else:
-            exit(1)
+            break
     print("\rTeams loaded. Do not click anything in the browser from now on.")
-
     time.sleep(5)
 
-    # Every mode uses the countdown loop: it reads each class's start time (from
-    # the channel banner and/or the Outlook calendar depending on the mode),
-    # shows a live countdown, and auto-joins `join_before_min` minutes early.
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    global config, meetings, mode, total_members, current_meeting
+
+    mode = config.get("meeting_mode", 1)
+    if not (0 < mode < 4):
+        mode = 1
+
+    email    = config.get('email', '')
+    password = config.get('password', '')
+
+    if not email:
+        email = input('Email: ')
+    if not password:
+        password = getpass('Password: ')
+
+    open_and_login(email, password)
+
+    # The countdown loop reads each class's start time (channel banner and/or
+    # Outlook calendar by mode), shows a live countdown, and auto-joins
+    # `join_before_min` minutes early.
     #   mode 1 = both sources · mode 2 = channels only · mode 3 = calendar only.
+    # If the user closes Chrome, run_schedule_loop raises a browser-closed error
+    # that bubbles up to __main__, which stops the bot cleanly (no traceback).
     run_schedule_loop()
 
 
@@ -1274,9 +1303,25 @@ if __name__ == "__main__":
 
     try:
         main()
+    except KeyboardInterrupt:
+        print("\nĐã dừng bot. Tạm biệt!")
+    except Exception as e:
+        if _browser_dead(e):
+            print("\n⚠️  Chrome đã đóng nên bot dừng lại. Mở lại run.command để chạy tiếp.")
+        else:
+            raise
     finally:
-        if browser:
-            browser.quit()
+        try:
+            if browser:
+                browser.quit()
+        except Exception:
+            pass
         if hangup_thread:
-            hangup_thread.cancel()
-        discord_notification("Browser closed", "Thank you!")
+            try:
+                hangup_thread.cancel()
+            except Exception:
+                pass
+        try:
+            discord_notification("Browser closed", "Thank you!")
+        except Exception:
+            pass

@@ -20,6 +20,13 @@ if not defined PY (
     exit /b 1
 )
 
+rem --- Kiem tra thu vien, tu cai neu thieu (chi lan dau) ---
+%PY% -c "import selenium, discord, requests" >nul 2>nul
+if errorlevel 1 (
+    echo Dang cai dat thu vien lan dau, vui long doi...
+    %PY% -m pip install -r requirements.txt
+)
+
 rem --- Chay bot (mo form cau hinh trong trinh duyet) ---
 %PY% src/auto_joiner.py %*
 
