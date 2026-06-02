@@ -207,10 +207,3 @@ python inspect_teams.py
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ntu168108/autoconnect-Teams-extention&type=date&legend=top-left" />
  </picture>
 </a>
-
----
-
-## Ghi nhận
-
-Dựa trên ý tưởng và mã nguồn ban đầu của **[TobiasPankner/Teams-Auto-Joiner](https://github.com/TobiasPankner/Teams-Auto-Joiner)**.  
-Bản này viết lại toàn bộ selector cho New Teams và bổ sung giao diện cấu hình Web UI.
