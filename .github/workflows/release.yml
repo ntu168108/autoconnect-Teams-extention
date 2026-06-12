@@ -30,7 +30,12 @@ jobs:
       - name: Build binary
         run: >
           python -m PyInstaller --onefile --console --name TeamsAutoJoiner
+          --collect-submodules selenium
           --distpath dist --workpath build --specpath build src/main.py
+
+      - name: Smoke test binary
+        shell: bash
+        run: ./dist/TeamsAutoJoiner* --selfcheck
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
