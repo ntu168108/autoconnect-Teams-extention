@@ -25,7 +25,7 @@ def test_load_merges_defaults(tmp_path, monkeypatch):
         encoding="utf-8")
     cfg = config_mod.load()
     assert cfg["email"] == "a@b.c"
-    assert cfg["meeting_mode"] == 1          # default filled in
+    assert cfg["meeting_mode"] == 3          # default filled in
     assert cfg["blacklist"] == [{"team_name": "X"}]  # untouched keys preserved
 
 

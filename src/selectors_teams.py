@@ -87,6 +87,7 @@ document.querySelectorAll('[aria-label]').forEach(function(e){
 return out.slice(0,120);
 """
 
-# Calendar aria-labels that are markers, not real events.
+# Calendar aria-labels that are markers, not real events (VI + EN UI).
 _CAL_SKIP = ("ngoài giờ làm việc", "thời gian hiện tại", "kế hoạch công việc",
-             "dạng xem lịch")
+             "dạng xem lịch",
+             "outside of working hours", "current time", "calendar view")
