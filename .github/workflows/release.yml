@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            zip: TeamsAutoJoiner-Windows.zip
+          - os: macos-latest
+            zip: TeamsAutoJoiner-macOS.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build binary
+        run: >
+          python -m PyInstaller --onefile --console --name TeamsAutoJoiner
+          --distpath dist --workpath build --specpath build src/main.py
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item config.json.example dist/
+          Copy-Item packaging/HUONG-DAN.txt dist/
+          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.zip }}
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cp config.json.example packaging/HUONG-DAN.txt dist/
+          cat > "dist/Chạy bot.command" <<'EOF'
+          #!/bin/bash
+          cd "$(dirname "$0")"
+          ./TeamsAutoJoiner
+          echo ""
+          echo "=== Bot đã dừng. Nhấn phím bất kỳ để đóng. ==="
+          read -n 1 -s -r
+          EOF
+          chmod +x "dist/Chạy bot.command" dist/TeamsAutoJoiner
+          cd dist && zip -r "../${{ matrix.zip }}" .
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.zip }}
+          generate_release_notes: true
