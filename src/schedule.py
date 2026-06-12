@@ -7,13 +7,19 @@ from datetime import datetime, timedelta
 import runtime as rt
 import selectors_teams as S
 import status
-from browser import switch_to_teams_tab, wait_until_found
+from browser import browser_dead, switch_to_teams_tab, wait_until_found
 from joiner import (decide_meeting, get_meeting_members,
                     handle_leave_threshold, hangup, join_meeting)
 from models import Meeting
 from notify import discord_notification
 from scanner import (_discover_calendar_events, discover_scheduled_meetings,
                      get_all_teams, get_meetings)
+
+
+def _short_err(e):
+    """First line of an exception message — selenium appends a chromedriver
+    stacktrace that is useless noise in the user-facing log."""
+    return str(e).split("\n", 1)[0].strip() or type(e).__name__
 
 
 def _fmt_td(td):
@@ -140,14 +146,18 @@ def run_schedule_loop():
             except status.BotStopped:
                 raise
             except Exception as e:
-                status.log(f"Lỗi khi dò kênh: {e}")
+                if browser_dead(e):
+                    raise
+                status.log(f"Lỗi khi dò kênh: {_short_err(e)}")
         if rt.mode != 2:   # mode 1 (cả hai) / 3 (chỉ lịch) → đọc sự kiện trên Lịch Outlook
             try:
                 schedule += _discover_calendar_events()
             except status.BotStopped:
                 raise
             except Exception as e:
-                status.log(f"Lỗi khi đọc lịch: {e}")
+                if browser_dead(e):
+                    raise
+                status.log(f"Lỗi khi đọc lịch: {_short_err(e)}")
 
         # Khử trùng theo giờ bắt đầu; ưu tiên mục có kênh (vào lớp chính xác hơn).
         by_start = {}
