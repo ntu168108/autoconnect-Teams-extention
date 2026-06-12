@@ -184,9 +184,9 @@ def _render_form(cfg):
     email = _esc(cfg.get("email", ""))
     password = _esc(cfg.get("password", ""))
     try:
-        mode = int(cfg.get("meeting_mode", 1) or 1)
+        mode = int(cfg.get("meeting_mode", 3) or 3)
     except (ValueError, TypeError):
-        mode = 1
+        mode = 3
 
     def ck(v):
         return "checked" if mode == v else ""
@@ -454,7 +454,7 @@ class _Handler(BaseHTTPRequestHandler):
         cfg = dict(_Handler.config)  # preserve untouched keys (blacklist, etc.)
         cfg["email"] = g("email")
         cfg["password"] = g("password")
-        cfg["meeting_mode"] = as_int("meeting_mode", 1)
+        cfg["meeting_mode"] = as_int("meeting_mode", 3)
         cfg["join_before_min"] = as_int("join_before_min", 2)
         cfg["headless"] = "headless" in form
         cfg["mute_audio"] = "mute_audio" in form

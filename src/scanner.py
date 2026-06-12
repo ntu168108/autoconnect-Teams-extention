@@ -256,26 +256,41 @@ def discover_scheduled_meetings():
     return list(found.values())
 
 
-# Outlook-calendar event aria-labels (Vietnamese) look like:
-#   "môn toán, 5:02 CH đến 5:32 CH, Thứ Hai, Tháng 6 01, 2026, Busy"
+# Outlook-calendar event aria-labels depend on the account's display language:
+#   VI: "môn toán, 5:02 CH đến 5:32 CH, Thứ Hai, Tháng 6 01, 2026, Busy"
+#   EN: "math class, 5:02 PM to 5:32 PM, Monday, June 1, 2026, Busy"
 # Note the calendar differs from the channel banner: the time is 12-hour with
-# SA (AM) / CH (PM), and the date is "Tháng <month> <day>, <year>" (month first).
-_CAL_TIME_RE = re.compile(r'(\d{1,2}):(\d{2})\s*(SA|CH)')
+# SA/CH (VI) or AM/PM (EN), and the date puts the month first.
+_CAL_TIME_RE = re.compile(r'(\d{1,2}):(\d{2})\s*(SA|CH|AM|PM)', re.IGNORECASE)
 _CAL_DATE_RE = re.compile(r'Tháng\s+(\d{1,2})\s+(\d{1,2}),\s*(\d{4})')
+_EN_MONTHS = {m: i + 1 for i, m in enumerate(
+    ("january", "february", "march", "april", "may", "june", "july",
+     "august", "september", "october", "november", "december"))}
+_CAL_DATE_EN_RE = re.compile(
+    r'(' + '|'.join(_EN_MONTHS) + r')\s+(\d{1,2}),\s*(\d{4})', re.IGNORECASE)
 
 
 def _parse_calendar_time(aria):
     """Return the start datetime of an Outlook-calendar event aria-label, or None."""
-    tm = _CAL_TIME_RE.search(aria or "")
-    dm = _CAL_DATE_RE.search(aria or "")
-    if not tm or not dm:
+    aria = aria or ""
+    tm = _CAL_TIME_RE.search(aria)
+    if not tm:
         return None
-    hour, minute, ampm = int(tm.group(1)), int(tm.group(2)), tm.group(3)
-    if ampm == "CH" and hour != 12:      # PM
+    hour, minute, ampm = int(tm.group(1)), int(tm.group(2)), tm.group(3).upper()
+    if ampm in ("CH", "PM") and hour != 12:
         hour += 12
-    elif ampm == "SA" and hour == 12:    # 12 AM = midnight
+    elif ampm in ("SA", "AM") and hour == 12:    # 12 AM = midnight
         hour = 0
-    month, day, year = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
+
+    dm = _CAL_DATE_RE.search(aria)
+    if dm:
+        month, day, year = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
+    else:
+        dm = _CAL_DATE_EN_RE.search(aria)
+        if not dm:
+            return None
+        month = _EN_MONTHS[dm.group(1).lower()]
+        day, year = int(dm.group(2)), int(dm.group(3))
     try:
         return datetime(year, month, day, hour, minute)
     except ValueError:
@@ -291,10 +306,12 @@ def _discover_calendar_events():
     time.sleep(3)
     iframe = wait_until_found(S.SEL_CAL_IFRAME, 15, print_error=False)
     if iframe is None:
+        status.log("Không thấy khung Lịch Outlook — tab Lịch có mở được không?")
         return out
 
     rt.browser.switch_to.frame(iframe)
     labels = []
+    js_err = None
     try:
         deadline = time.time() + 25
         while time.time() < deadline:
@@ -302,25 +319,40 @@ def _discover_calendar_events():
                 n = rt.browser.execute_script(
                     'return document.querySelectorAll(\'button,[role="button"]\').length;') or 0
                 labels = rt.browser.execute_script(S._CAL_EVENTS_JS) or []
-            except Exception:
-                n, labels = 0, []
+            except Exception as e:
+                n, labels, js_err = 0, [], e
             if n > 30 and labels:
                 break
             time.sleep(1.5)
     finally:
         rt.browser.switch_to.default_content()
 
+    if not labels and js_err is not None:
+        status.log(f"Lỗi đọc khung Lịch: {str(js_err).splitlines()[0]}")
+
+    candidates = []
     for al in labels:
         low = al.lower()
         if any(s in low for s in S._CAL_SKIP):
-            continue
-        start = _parse_calendar_time(al)
-        if start is None:
             continue
         title = al.split(",")[0].strip()
         # Skip time-block / "working hours" / selection markers: those have no
         # real title (their first segment is itself a time, e.g. "6:00 CH đến …").
         if not title or _CAL_TIME_RE.match(title):
             continue
+        candidates.append(al)
+        start = _parse_calendar_time(al)
+        if start is None:
+            continue
         out.append({"start": start, "title": title, "source": "calendar"})
+
+    # Surface why the calendar looks empty: no labels at all vs. labels whose
+    # date/time format we failed to parse (e.g. an unexpected display language).
+    if not out:
+        if candidates:
+            status.log(f"Thấy {len(candidates)} sự kiện trên Lịch nhưng không đọc "
+                       f"được ngày giờ. Ví dụ: “{candidates[0][:160]}”")
+        else:
+            status.log(f"Lịch đã tải ({len(labels)} nhãn) nhưng không thấy sự kiện nào "
+                       "trong tuần đang hiển thị.")
     return out

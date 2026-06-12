@@ -23,9 +23,9 @@ except Exception:
 
 
 def main():
-    rt.mode = rt.config.get("meeting_mode", 1)
+    rt.mode = rt.config.get("meeting_mode", 3)
     if not (0 < rt.mode < 4):
-        rt.mode = 1
+        rt.mode = 3
 
     email = rt.config.get("email", "")
     password = rt.config.get("password", "")

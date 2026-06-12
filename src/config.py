@@ -11,7 +11,7 @@ import sys
 DEFAULTS = {
     "email": "",
     "password": "",
-    "meeting_mode": 1,          # 1 = both (channels + calendar)
+    "meeting_mode": 3,          # 3 = calendar only (fastest), 2 = channels, 1 = both
     "join_before_min": 2,       # vào lớp sớm mấy phút (0 = đúng giờ)
     "headless": False,
     "mute_audio": False,
