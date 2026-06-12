@@ -39,6 +39,20 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--selfcheck" in sys.argv:
+        # Smoke test for packaged builds: selenium loads its webdriver
+        # submodules lazily, so a missing one only fails at runtime.
+        import selenium.webdriver.chrome.options
+        import selenium.webdriver.chrome.service
+        import selenium.webdriver.edge.options
+        import selenium.webdriver.edge.service
+        import selenium.webdriver.remote.webdriver
+        import selenium.webdriver.support.expected_conditions
+        import selenium.webdriver.support.ui
+        import requests
+        print("SELFCHECK OK")
+        sys.exit(0)
+
     use_gui = "--no-gui" not in sys.argv
 
     if use_gui:
