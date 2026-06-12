@@ -1,46 +1,21 @@
-"""
-setup_ui.py — Local web form for configuring the Teams auto-joiner.
+"""Local web UI: config form (/) → live status dashboard (/status).
 
-Opens a small HTML form in a dedicated Chrome/Edge app window (served from
-127.0.0.1 only), pre-filled with the current config.json values. On submit,
-writes the values back to config.json and returns the merged config dict.
-
-Minimal neutral theme with light/dark toggle and inline Lucide SVG icons.
-No third-party dependencies — standard library only.
-"""
+Stdlib-only HTTP server bound to 127.0.0.1. The server stays alive for the
+whole bot run; the dashboard polls /api/status every 2 s and the countdown
+ticks client-side."""
 
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import threading
-import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 
-try:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-except Exception:
-    pass
-
-# Resolve paths relative to the repo root (one level above this file's src/ dir)
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH  = os.path.join(_ROOT, "config.json")
-EXAMPLE_PATH = os.path.join(_ROOT, "config.json.example")
-
-DEFAULTS = {
-    "email": "",
-    "password": "",
-    "meeting_mode": 1,          # 1 = both (channels + calendar); classes are usually channel meetings
-    "join_before_min": 2,       # vào lớp sớm mấy phút (0 = đúng giờ)
-    "headless": False,
-    "mute_audio": False,
-    "auto_leave_after_min": -1,
-    "check_interval": 10,
-    "join_message": "",
-    "discord_webhook_url": "",
-}
+import config as config_mod
+import status
 
 # ── Inline Lucide icons (https://lucide.dev, ISC license) ─────────────────────
 ICONS = {
@@ -57,6 +32,8 @@ ICONS = {
     "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
     "moon": '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
     "check": '<path d="M20 6 9 17l-5-5"/>',
+    "square": '<rect width="14" height="14" x="5" y="5" rx="2"/>',
+    "activity": '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
 }
 
 
@@ -151,6 +128,30 @@ button.start svg{width:18px;height:18px;}
 .done .ok svg{width:30px;height:30px;}
 .done h1{margin:0 0 8px;font-size:20px;}
 .done p{color:var(--muted);font-size:14px;margin:0;}
+.status-wrap{max-width:560px;}
+.big-state{display:flex;align-items:center;gap:12px;padding:20px 24px;}
+.big-state .dot{width:12px;height:12px;border-radius:50%;background:var(--accent);flex:none;
+  animation:pulse 1.6s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.big-state h2{margin:0;font-size:18px;}
+.big-state p{margin:2px 0 0;font-size:13px;color:var(--muted);}
+.countdown{font-variant-numeric:tabular-nums;font-size:44px;font-weight:800;
+  text-align:center;padding:6px 0 14px;letter-spacing:1px;}
+.sched{padding:0 24px 8px;}
+.sched h3{font-size:13px;color:var(--muted);margin:8px 0 6px;text-transform:uppercase;letter-spacing:.4px;}
+.sched ul{list-style:none;margin:0;padding:0;}
+.sched li{display:flex;justify-content:space-between;gap:10px;padding:7px 10px;border:1px solid var(--border);
+  border-radius:9px;margin-bottom:6px;font-size:13.5px;}
+.sched li .when{color:var(--muted);flex:none;}
+.logbox{margin:10px 24px 16px;background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:10px 12px;height:180px;overflow-y:auto;font-size:12.5px;line-height:1.55;
+  font-family:Consolas,Menlo,monospace;white-space:pre-wrap;}
+.btn-stop{display:flex;align-items:center;justify-content:center;gap:9px;margin:0 24px 22px;padding:12px;
+  font-size:15px;font-weight:700;color:#fff;background:#dc2626;border:none;border-radius:11px;
+  cursor:pointer;width:calc(100% - 48px);}
+.btn-stop:hover{filter:brightness(1.1);}
+.btn-stop:disabled{opacity:.5;cursor:default;}
+.btn-stop svg{width:17px;height:17px;}
 """
 
 THEME_HEAD = (
@@ -172,28 +173,6 @@ def _doc(title, body):
             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
             f"<title>{title}</title>" + THEME_HEAD + "<style>" + STYLE + "</style></head>"
             "<body>" + body + "</body></html>")
-
-
-SUCCESS_HTML = _doc(
-    "Đã lưu",
-    "<div class='card'><div class='done'>"
-    "<div class='ok'>" + _icon("check") + "</div>"
-    "<h1>Đã lưu cấu hình</h1>"
-    "<p>Cửa sổ này sẽ tự đóng —<br>bot đang khởi động…</p>"
-    "</div></div>"
-    "<script>setTimeout(function(){try{window.close();}catch(e){}},1500);</script>"
-)
-
-
-def _load_config():
-    for path in (CONFIG_PATH, EXAMPLE_PATH):
-        if os.path.exists(path):
-            try:
-                with open(path, encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-    return {}
 
 
 def _esc(s):
@@ -303,6 +282,117 @@ def _render_form(cfg):
     return _doc("Teams Auto-Joiner — Cấu hình", body)
 
 
+def _render_status_page():
+    body = f"""
+<div class="card status-wrap">
+  <header>
+    <div class="brand">
+      <span class="brand-icon">{_icon("activity")}</span>
+      <div>
+        <h1>Teams Auto-Joiner</h1>
+        <p>Bảng theo dõi — để cửa sổ này mở</p>
+      </div>
+    </div>
+    <button type="button" class="theme-btn" onclick="toggleTheme()" title="Đổi giao diện sáng / tối">
+      <span class="icon-moon">{_icon("moon")}</span><span class="icon-sun">{_icon("sun")}</span>
+    </button>
+  </header>
+  <div class="big-state"><span class="dot" id="dot"></span>
+    <div><h2 id="state-line">Đang khởi động…</h2><p id="detail-line"></p></div>
+  </div>
+  <div class="countdown" id="countdown" hidden>--:--:--</div>
+  <div class="sched"><h3>Lịch đã dò được</h3><ul id="sched-list"><li>Chưa có dữ liệu</li></ul></div>
+  <div class="sched"><h3>Nhật ký hoạt động</h3></div>
+  <div class="logbox" id="logbox"></div>
+  <button class="btn-stop" id="btn-stop">{_icon("square")} Dừng bot</button>
+</div>
+{TOGGLE_SCRIPT}
+<script>
+var STATE_VI = {{
+  starting:   "Đang khởi động…",
+  scanning:   "Đang dò lịch học…",
+  countdown:  "Đếm ngược tới buổi học",
+  joining:    "Đang vào lớp…",
+  in_meeting: "Đang trong lớp",
+  idle:       "Đang chờ",
+  stopped:    "Bot đã dừng",
+  error:      "Có lỗi xảy ra"
+}};
+var joinAt = null, clockOff = 0, stopped = false;
+
+function fmt(t) {{
+  t = Math.max(0, Math.round(t));
+  var h = Math.floor(t/3600), m = Math.floor(t%3600/60), s = t%60;
+  function p(n) {{ return (n<10?"0":"")+n; }}
+  return (h? h+":" : "") + p(m) + ":" + p(s);
+}}
+
+function tick() {{
+  var el = document.getElementById("countdown");
+  if (joinAt && !stopped) {{
+    el.hidden = false;
+    el.textContent = fmt(joinAt - (Date.now()/1000 - clockOff));
+  }} else {{ el.hidden = true; }}
+}}
+setInterval(tick, 500);
+
+function render(s) {{
+  clockOff = Date.now()/1000 - s.now;
+  joinAt = (s.state === "countdown") ? s.join_at : null;
+  var line = STATE_VI[s.state] || s.state;
+  if (s.title && (s.state === "countdown" || s.state === "in_meeting" || s.state === "joining"))
+    line += " — " + s.title;
+  document.getElementById("state-line").textContent = line;
+  document.getElementById("detail-line").textContent = s.detail || "";
+  var ul = document.getElementById("sched-list");
+  if (s.schedule && s.schedule.length) {{
+    ul.innerHTML = "";
+    s.schedule.forEach(function(m) {{
+      var d = new Date(m.start*1000);
+      var li = document.createElement("li");
+      var name = document.createElement("span"); name.textContent = m.title;
+      var when = document.createElement("span"); when.className = "when";
+      when.textContent = d.toLocaleString("vi-VN", {{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"2-digit"}});
+      li.appendChild(name); li.appendChild(when); ul.appendChild(li);
+    }});
+  }}
+  var box = document.getElementById("logbox");
+  var atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 8;
+  box.textContent = (s.logs || []).map(function(l) {{
+    var d = new Date(l.t*1000);
+    function p(n) {{ return (n<10?"0":"")+n; }}
+    return "[" + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) + "] " + l.msg;
+  }}).join("\\n");
+  if (atBottom) box.scrollTop = box.scrollHeight;
+  if (s.state === "stopped") {{
+    stopped = true;
+    document.getElementById("dot").style.animation = "none";
+    document.getElementById("btn-stop").disabled = true;
+    document.getElementById("btn-stop").textContent = "Bot đã dừng — có thể đóng cửa sổ này";
+  }}
+}}
+
+function poll() {{
+  fetch("/api/status").then(function(r) {{ return r.json(); }}).then(render)
+    .catch(function() {{
+      if (!stopped) {{
+        document.getElementById("state-line").textContent = "Bot đã thoát";
+        document.getElementById("detail-line").textContent = "Có thể đóng cửa sổ này.";
+      }}
+    }});
+}}
+setInterval(poll, 2000); poll();
+
+document.getElementById("btn-stop").onclick = function() {{
+  if (!confirm("Dừng bot? Bot sẽ rời lớp (nếu đang trong lớp) và đóng Chrome.")) return;
+  fetch("/api/stop", {{method: "POST"}});
+  this.disabled = true; this.textContent = "Đang dừng…";
+}};
+</script>
+"""
+    return _doc("Teams Auto-Joiner — Theo dõi", body)
+
+
 class _Handler(BaseHTTPRequestHandler):
     config = {}
     submitted = None
@@ -311,22 +401,43 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # silence default request logging
 
-    def _send_html(self, html, status=200):
+    def _send_html(self, html, code=200):
         body = html.encode("utf-8")
-        self.send_response(status)
+        self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_json(self, obj):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        if self.path.split("?")[0] in ("/", "/index.html"):
+        path = self.path.split("?")[0]
+        if path in ("/", "/index.html"):
             self._send_html(_render_form(_Handler.config))
+        elif path == "/status":
+            self._send_html(_render_status_page())
+        elif path == "/api/status":
+            self._send_json(status.snapshot())
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
+        path = self.path.split("?")[0]
+        if path == "/api/stop":
+            status.stop_requested.set()
+            status.log("Đã nhận yêu cầu dừng từ trang theo dõi.")
+            self._send_json({"ok": True})
+            return
+
+        # POST / — save config, then show the dashboard in the same window
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length).decode("utf-8")
         form = parse_qs(raw, keep_blank_values=True)
@@ -352,11 +463,12 @@ class _Handler(BaseHTTPRequestHandler):
         cfg["join_message"] = g("join_message")
         cfg["discord_webhook_url"] = g("discord_webhook_url")
 
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-
+        config_mod.save(cfg)
         _Handler.result = cfg
-        self._send_html(SUCCESS_HTML)
+
+        self.send_response(303)          # See Other → GET /status
+        self.send_header("Location", "/status")
+        self.end_headers()
         if _Handler.submitted is not None:
             _Handler.submitted.set()
 
@@ -420,13 +532,15 @@ def _find_browser():
     return None, None
 
 
+# Unique marker in the setup window's command line (its --user-data-dir).
+_SETUP_PROFILE_MARKER = "taj_setup_profile"
+
+
 def _open_app_window(url):
     """Open the form in a dedicated Chrome/Edge app window (no tabs/address bar)."""
     mode, path = _find_browser()
     if not mode:
         return False
-    import subprocess
-    import tempfile
     profile = os.path.join(tempfile.gettempdir(), _SETUP_PROFILE_MARKER)
     flags = [
         f"--app={url}",
@@ -448,60 +562,30 @@ def _open_app_window(url):
         return False
 
 
-# Unique marker in the setup window's command line (its --user-data-dir). Used
-# both to launch the isolated window and to find+close exactly that window later.
-_SETUP_PROFILE_MARKER = "taj_setup_profile"
-
-
-def _close_app_window():
-    """Close the dedicated setup browser window after the form is submitted.
-
-    `window.close()` from JS does not work for a Chrome `--app` window opened via
-    `open -na` on macOS, so we close it from the OS side instead. We match only
-    processes carrying our unique --user-data-dir marker, so the user's normal
-    browser windows are never touched."""
-    import subprocess
-    try:
-        if sys.platform == "win32":
-            subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "Get-CimInstance Win32_Process -Filter "
-                 f"\"CommandLine LIKE '%{_SETUP_PROFILE_MARKER}%'\" | "
-                 "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
-                 "-ErrorAction SilentlyContinue }"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        else:
-            # macOS / Linux: pkill matches the full command line (-f)
-            subprocess.run(["pkill", "-f", _SETUP_PROFILE_MARKER],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+_server = None
 
 
 def run_setup_gui(open_browser=True):
-    """Show the config form, block until submitted, return the merged config."""
-    cfg = {**DEFAULTS, **_load_config()}
+    """Serve the form, block until submitted, return the merged config.
+    The server KEEPS RUNNING afterwards to power /status."""
+    global _server
+    cfg = config_mod.load()
     _Handler.config = cfg
     _Handler.submitted = threading.Event()
     _Handler.result = cfg
 
-    server = HTTPServer(("127.0.0.1", 0), _Handler)
-    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    _server = HTTPServer(("127.0.0.1", 0), _Handler)
+    url = f"http://127.0.0.1:{_server.server_address[1]}/"
 
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=_server.serve_forever, daemon=True).start()
 
     print("\n" + "=" * 62)
     print("  Đang mở form cấu hình trong cửa sổ riêng...")
     print(f"  Nếu không tự mở, hãy mở link này: {url}")
     print("=" * 62 + "\n")
 
-    opened_app = False
     if open_browser:
-        # Prefer a dedicated Chrome/Edge app window (separate from the user's
-        # normal browsing tabs); fall back to the default browser if not found.
-        opened_app = _open_app_window(url)
-        if not opened_app:
+        if not _open_app_window(url):
             try:
                 webbrowser.open(url)
             except Exception:
@@ -511,16 +595,18 @@ def run_setup_gui(open_browser=True):
         _Handler.submitted.wait()
     except KeyboardInterrupt:
         pass
-    finally:
-        # Keep the "Đã lưu" page visible briefly so the user sees the
-        # confirmation, then close the dedicated setup window automatically and
-        # let the bot start — no manual close needed.
-        time.sleep(1.2)
-        if opened_app:
-            _close_app_window()
-        server.shutdown()
-
     return _Handler.result
+
+
+def start_headless_server():
+    """--no-gui runs still get the dashboard: start the server without
+    opening a window and log the URL."""
+    global _server
+    _Handler.config = config_mod.load()
+    _server = HTTPServer(("127.0.0.1", 0), _Handler)
+    url = f"http://127.0.0.1:{_server.server_address[1]}/status"
+    threading.Thread(target=_server.serve_forever, daemon=True).start()
+    status.log(f"Bảng theo dõi: {url}")
 
 
 if __name__ == "__main__":
