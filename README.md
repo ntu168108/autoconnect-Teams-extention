@@ -58,37 +58,32 @@
 
 ## Cài đặt & chạy
 
-### Windows
+### Cách 1 — Tải bản dựng sẵn (KHUYÊN DÙNG, không cần cài gì)
+
+1. Vào trang **[Releases](https://github.com/ntu168108/autoconnect-Teams-extention/releases)** → tải file cho máy bạn:
+   - Windows: `TeamsAutoJoiner-Windows.zip`
+   - macOS: `TeamsAutoJoiner-macOS.zip`
+2. **Giải nén** ra một thư mục bất kỳ.
+3. Double-click:
+   - Windows: `TeamsAutoJoiner.exe` — nếu hiện cảnh báo xanh, bấm **More info → Run anyway**.
+   - macOS: `Chạy bot.command` — lần đầu bị chặn thì **chuột phải → Open → Open**.
+4. Form cấu hình hiện ra → điền **Email / Mật khẩu** → bấm **▶ Bắt đầu**.
+5. Trang chuyển thành **Bảng theo dõi**: đếm ngược, lịch học, nhật ký, nút **Dừng bot**. Để cửa sổ này mở.
+
+> Máy cần có **Google Chrome** hoặc **Microsoft Edge** (hầu hết máy có sẵn).
+>
+> **Đừng bấm gì vào cửa sổ Chrome mà bot mở.** Nếu hiện yêu cầu xác thực
+> **(MFA / OTP)**, bạn tự hoàn tất trong cửa sổ đó — bot sẽ chờ.
+
+### Cách 2 — Chạy từ mã nguồn (cần Python 3.8+)
 
 ```bash
-# Bước 1 — Cài thư viện (chỉ làm một lần)
 pip install -r requirements.txt
 ```
 
-Sau đó **double-click `run.bat`** để khởi động.
+Rồi double-click `run.bat` (Windows) hoặc `run.command` (macOS).
 
----
-
-### macOS
-
-```bash
-# Bước 1 — Cài thư viện (chỉ làm một lần)
-pip3 install -r requirements.txt
-```
-
-Sau đó **double-click `run.command`** trong Finder.
-
-> **Lần đầu chạy bị chặn?** Vào **System Settings → Privacy & Security → Open Anyway**.
-
----
-
-**Các bước tiếp theo (cả 2 hệ điều hành):**
-
-3. Cửa sổ **cấu hình Web UI** hiện ra trong trình duyệt → điền **Email / Mật khẩu**, chọn **Nguồn tìm cuộc họp**, bấm **▶ Bắt đầu**
-4. Bot mở Chrome, đăng nhập và bắt đầu tự tìm + vào họp
-
-> **Đừng bấm gì vào cửa sổ Chrome đó** trong khi bot đang chạy.
-> Nếu hiện yêu cầu xác thực **(MFA / OTP)**, bạn tự hoàn tất trong cửa sổ đó — bot sẽ chờ.
+> **macOS lần đầu chạy bị chặn?** Vào **System Settings → Privacy & Security → Open Anyway**.
 
 ---
 
@@ -182,19 +177,31 @@ Microsoft thường xuyên đổi UI — xem mục **Dành cho người phát tr
 Microsoft thường xuyên đổi giao diện Teams → có thể làm hỏng các *selector*. Dùng công cụ debug kèm theo:
 
 ```bash
-python inspect_teams.py
+python tools/inspect_teams.py
 ```
 
-Đăng nhập, điều hướng đến màn hình cần, gõ **Enter** để lưu **HTML + screenshot + danh sách nút bấm** vào `dumps/`, rồi cập nhật selector trong `auto_joiner.py`.
+Đăng nhập, điều hướng đến màn hình cần, gõ **Enter** để lưu **HTML + screenshot + danh sách nút bấm** vào `dumps/`, rồi cập nhật selector trong `src/selectors_teams.py`.
 
 | File | Vai trò |
 |---|---|
-| `auto_joiner.py` | Bot chính (đăng nhập, tìm họp, vào họp, gửi lời nhắn) |
-| `setup_ui.py` | Giao diện web cấu hình |
-| `inspect_teams.py` | Công cụ debug & chụp DOM |
-| `run.bat` | Trình khởi động **Windows** |
-| `run.command` | Trình khởi động **macOS** (tự kiểm tra yêu cầu hệ thống) |
+| `src/main.py` | Entry point: vòng đời bot, bắt lỗi thân thiện |
+| `src/schedule.py` | Vòng lặp chính: dò lịch → đếm ngược → vào lớp |
+| `src/scanner.py` | Dò lịch học từ kênh + Lịch Outlook |
+| `src/joiner.py` | Vào lớp, tắt cam/mic, gửi lời nhắn, rời họp |
+| `src/browser.py` | Mở Chrome/Edge, đăng nhập, wait helpers |
+| `src/selectors_teams.py` | **Toàn bộ selector + JS của Teams** (sửa ở đây khi MS đổi UI) |
+| `src/webui.py` | Form cấu hình + bảng theo dõi (web) |
+| `src/status.py` | Trạng thái chia sẻ + log cho bảng theo dõi |
+| `src/config.py` | Đọc/ghi config.json (hỗ trợ cả khi đóng gói exe) |
+| `src/notify.py` | Thông báo Discord webhook |
+| `src/models.py` / `src/runtime.py` | Data classes / trạng thái dùng chung |
+| `tools/inspect_teams.py` | Công cụ debug & chụp DOM |
+| `run.bat` / `run.command` | Khởi động từ mã nguồn (Windows / macOS) |
+| `build_local.bat` / `build_local.command` | Build file chạy 1-click bằng PyInstaller |
+| `.github/workflows/release.yml` | Tự build & đăng Releases khi push tag `v*` |
 | `config.json.example` | Mẫu cấu hình đầy đủ tất cả tùy chọn |
+
+**Phát hành bản mới:** sửa code → commit → `git tag v1.x.x` → `git push origin main --tags` — GitHub Actions tự build cả 2 nền tảng và đăng lên Releases.
 
 ---
 
