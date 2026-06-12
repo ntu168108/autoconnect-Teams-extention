@@ -1,0 +1,20 @@
+TEAMS AUTO-JOINER — HƯỚNG DẪN NHANH
+
+WINDOWS:
+ 1. Double-click TeamsAutoJoiner.exe
+ 2. Nếu Windows hiện cảnh báo xanh "Windows protected your PC":
+    bấm "More info" → "Run anyway" (app chưa mua chữ ký số, không phải virus).
+ 3. Form cấu hình hiện ra → điền Email/Mật khẩu → bấm Bắt đầu.
+
+MACOS:
+ 1. Double-click "Chạy bot.command"
+ 2. Lần đầu nếu bị chặn: chuột phải vào file → Open → Open.
+    (Hoặc System Settings → Privacy & Security → Open Anyway)
+ 3. Form cấu hình hiện ra → điền Email/Mật khẩu → bấm Bắt đầu.
+
+LƯU Ý:
+ - Cần có Google Chrome hoặc Microsoft Edge trên máy.
+ - Đừng bấm gì vào cửa sổ Chrome mà bot mở.
+ - Theo dõi bot ở trang "Bảng theo dõi" (tự mở trong trình duyệt).
+ - Muốn dừng: bấm nút "Dừng bot" trên trang theo dõi.
+ - File config.json (cạnh file chạy) chứa mật khẩu của bạn — KHÔNG gửi cho ai.
