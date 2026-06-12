@@ -30,12 +30,12 @@ fi
 
 # 2. Thu vien Python — tu cai neu thieu (chi lan dau)
 if [ -n "$PY" ]; then
-    if "$PY" -c "import selenium, requests; from discord import SyncWebhook" 2>/dev/null; then
+    if "$PY" -c "import selenium, requests" 2>/dev/null; then
         ok "Thu vien Python: day du"
     else
         warn "Thieu thu vien — dang tu cai (lan dau, vui long doi)..."
         "$PY" -m pip install -r requirements.txt
-        if "$PY" -c "import selenium, requests; from discord import SyncWebhook" 2>/dev/null; then
+        if "$PY" -c "import selenium, requests" 2>/dev/null; then
             ok "Da cai thu vien xong"
         else
             fail "Cai thu vien that bai. Thu chay tay: $PY -m pip install -r requirements.txt"
@@ -80,7 +80,7 @@ fi
 echo -e "\n${GRN}Tat ca yeu cau da san sang! Dang khoi dong bot...${NC}\n"
 
 # Chay bot
-"$PY" src/auto_joiner.py "$@"
+"$PY" src/main.py "$@"
 
 echo ""
 echo "=== Bot da dung. Nhan phim bat ky de dong cua so nay. ==="
