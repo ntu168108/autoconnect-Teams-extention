@@ -24,3 +24,7 @@ Thumbs.db
 .DS_Store
 .idea/
 .vscode/
+
+# Build outputs
+dist/
+build/
