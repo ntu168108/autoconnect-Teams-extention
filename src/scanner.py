@@ -10,6 +10,7 @@ from selenium.webdriver.common.by import By
 import runtime as rt
 import selectors_teams as S
 import status
+import teams_api
 from browser import (switch_to_calendar_tab, switch_to_teams_tab,
                      wait_until_found)
 from models import Channel, Meeting, Team
@@ -295,7 +296,11 @@ def _parse_calendar_time(aria):
 def _discover_calendar_events():
     """Read class times the user put on the Outlook calendar. Returns
     [{start, title, source:'calendar'}] (no channel — these are time markers;
-    the actual class is joined via its channel)."""
+    the actual class is joined via its channel).
+
+    Prefers Outlook's own JSON API (one call, exact timestamps, sees the whole
+    range rather than just the week on screen). Falls back to reading the
+    rendered calendar if that call fails for any reason."""
     out = []
     switch_to_calendar_tab()
     time.sleep(3)
@@ -308,6 +313,10 @@ def _discover_calendar_events():
     labels = []
     js_err = None
     try:
+        events = teams_api.fetch_calendar_events()
+        if events is not None:
+            return events
+
         deadline = time.time() + 25
         while time.time() < deadline:
             try:

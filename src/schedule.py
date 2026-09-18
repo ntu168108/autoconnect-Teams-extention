@@ -33,6 +33,34 @@ def _fmt_td(td):
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+def _sleep_or_join(seconds):
+    """status.sleep_checked, but returns as soon as the user clicks 'Vào lớp
+    ngay' on the dashboard instead of sleeping out the full interval."""
+    end = time.time() + seconds
+    while time.time() < end:
+        if rt.join_request is not None:
+            return
+        status.sleep_checked(min(1.0, max(end - time.time(), 0)))
+
+
+def _key(m):
+    """Identity of a class session, used to remember what we already sat in."""
+    return (m.get("channel_id") or m.get("title"), m["start"].isoformat())
+
+
+def _take_join_request():
+    """Pop the class the user clicked 'Vào lớp ngay' on, if any. The dashboard
+    resolves the click to the class itself, so this is never a stale index."""
+    entry, rt.join_request = rt.join_request, None
+    if entry is not None and _key(entry) in rt.handled:
+        # Already attended this run — a click that arrived while we were
+        # joining it would otherwise send us back to a class that has ended,
+        # burning the join window that belongs to the next one.
+        status.log(f"Bỏ qua yêu cầu vào lại buổi đã học: {entry['title']}")
+        return None
+    return entry
+
+
 def _join_live_channel_meeting():
     """At class time, scan the channels for a meeting that is open right now and
     join it. Used for calendar-sourced class times (which carry no channel)."""
@@ -47,8 +75,9 @@ def _join_live_channel_meeting():
 
 
 def _countdown_until(meeting, join_at, max_seconds):
-    """Count down to join_at. Returns True when join_at is reached, or False once
-    max_seconds elapse (caller should then re-scan).
+    """Count down to join_at. Returns True when join_at is reached, or False
+    once max_seconds elapse / the user asked for a specific class on the
+    dashboard (caller should then re-scan or honour that request).
 
     In a real terminal it updates ONE line in place via a carriage return. The
     line is kept short and padded to a fixed width so it overwrites cleanly
@@ -68,11 +97,14 @@ def _countdown_until(meeting, join_at, max_seconds):
     while time.time() < end:
         status.check_stop()
         now = datetime.now()
-        if now >= join_at:
+        if now >= join_at or rt.join_request is not None:
             if live:
                 sys.stdout.write("\n")
                 sys.stdout.flush()
-            return True
+            # A dashboard click is not a time-based join — report it as "not
+            # reached" so that if the click turns out to be stale the caller
+            # rescans instead of joining this class ahead of its time.
+            return rt.join_request is None
         # The countdown itself makes no browser calls, so check every ~10s that
         # Chrome is still open; if the user closed it, raise so the bot can stop
         # cleanly now instead of counting down to the end first.
@@ -130,11 +162,9 @@ def run_schedule_loop():
     rescan_seconds = max(int(rt.config.get('rescan_min', 10) or 10), 1) * 60
     status.log(f"Chế độ đếm ngược: tự vào lớp sớm {join_before} phút trước giờ bắt đầu.")
 
-    # Sessions already attended (or attempted), so we don't keep re-joining the
-    # class we just left. Lives in rt so it survives a browser restart.
-    def _key(m):
-        return (m.get("channel_id") or m.get("title"), m["start"].isoformat())
-
+    # Sessions already attended (or attempted) are tracked in rt.handled (see
+    # _key), so we don't keep re-joining the class we just left. It lives in rt
+    # so it survives a browser restart.
     while True:
         status.check_stop()
         status.report("scanning", detail="Đang dò lịch học…")
@@ -167,9 +197,10 @@ def run_schedule_loop():
                 by_start[k] = m
         schedule = list(by_start.values())
 
+        rt.schedule = sorted(schedule, key=lambda m: m["start"])
         status.report(schedule=[
-            {"title": m["title"], "start": m["start"].timestamp()}
-            for m in sorted(schedule, key=lambda m: m["start"])])
+            {"idx": i, "title": m["title"], "start": m["start"].timestamp()}
+            for i, m in enumerate(rt.schedule)])
 
         now = datetime.now()
         # Keep upcoming meetings, plus ones that started within the last 3h (a
@@ -184,53 +215,73 @@ def run_schedule_loop():
             mins = rescan_seconds // 60
             status.report("idle", detail=f"Chưa thấy buổi học sắp tới — quét lại sau {mins} phút")
             status.log(f"Chưa thấy buổi học sắp tới. Quét lại sau {mins} phút.")
-            status.sleep_checked(rescan_seconds)
-            continue
+            _sleep_or_join(rescan_seconds)
+            manual = _take_join_request()
+            if manual is None:
+                continue
+            nxt = manual
+        else:
+            nxt = upcoming[0]
+            join_at = nxt["start"] - timedelta(minutes=join_before)
+            status.log(f"Buổi kế tiếp: {nxt['title']} — bắt đầu {nxt['start']:%H:%M %d/%m}")
 
-        nxt = upcoming[0]
-        join_at = nxt["start"] - timedelta(minutes=join_before)
-        status.log(f"Buổi kế tiếp: {nxt['title']} — bắt đầu {nxt['start']:%H:%M %d/%m}")
-
-        # Count down (re-scanning periodically in case the schedule changes).
-        if not _countdown_until(nxt, join_at, rescan_seconds):
-            continue  # window elapsed without reaching join time → re-scan
+            # Count down (re-scanning periodically in case the schedule changes).
+            reached = _countdown_until(nxt, join_at, rescan_seconds)
+            manual = _take_join_request()
+            if manual is not None:
+                nxt = manual
+            elif not reached:
+                continue  # window elapsed without reaching join time → re-scan
 
         # ── Time to join ───────────────────────────────────────────────────
         rt.handled.add(_key(nxt))  # don't re-pick this session after we leave it
         status.report("joining", title=nxt["title"], detail="Đang vào lớp…")
-        status.log(f"⏰ Tới giờ vào lớp: {nxt['title']}")
-        discord_notification("Tới giờ vào lớp", nxt["title"])
+        if manual is not None:
+            status.log(f"▶ Vào lớp theo yêu cầu từ bảng theo dõi: {nxt['title']}")
+            discord_notification("Vào lớp theo yêu cầu", nxt["title"])
+        else:
+            status.log(f"⏰ Tới giờ vào lớp: {nxt['title']}")
+            discord_notification("Tới giờ vào lớp", nxt["title"])
 
         # Retry until joined or 15 min past the scheduled start (the teacher may
         # open the meeting a little late). A channel-sourced item knows its exact
         # channel; a calendar-sourced item only knows the time, so we scan the
-        # channels for whatever class is open right now.
-        deadline = nxt["start"] + timedelta(minutes=15)
-        while datetime.now() < deadline and rt.current_meeting is None:
-            status.check_stop()
-            if nxt.get("channel_id"):
-                # Channel-sourced: navigate to that channel and click its Join.
-                join_meeting(Meeting(
-                    m_id=f"channel:{nxt['channel_id']}",
-                    time_started=int(time.time()),
-                    title=nxt["title"],
-                    calendar_meeting=False,
-                    channel_id=nxt["channel_id"],
-                    team_id=nxt["team_id"],
-                ))
-            else:
-                # Calendar-sourced: open the meeting ON THE CALENDAR and click
-                # "Tham gia" (the user's classes are Teams meetings on the calendar).
-                join_meeting(Meeting(
-                    m_id=f"calendar:{nxt['title']}@{nxt['start'].isoformat()}",
-                    time_started=int(time.time()),
-                    title=nxt["title"],
-                    calendar_meeting=True,
-                ))
-            if rt.current_meeting is not None:
-                break
-            status.log("Lớp chưa mở để vào — thử lại sau 20 giây…")
-            status.sleep_checked(20)
+        # channels for whatever class is open right now. A class the user asked
+        # for by hand gets its 15 minutes counted from the click instead.
+        deadline = (datetime.now() if manual is not None else nxt["start"]) \
+            + timedelta(minutes=15)
+        # rt.current_meeting only goes non-None once we are actually in the
+        # call, which is a good half-minute into join_meeting(); the flag marks
+        # the whole attempt so the dashboard can refuse clicks meanwhile.
+        rt.joining = True
+        try:
+            while datetime.now() < deadline and rt.current_meeting is None:
+                status.check_stop()
+                if nxt.get("channel_id"):
+                    # Channel-sourced: navigate to that channel and click its Join.
+                    join_meeting(Meeting(
+                        m_id=f"channel:{nxt['channel_id']}",
+                        time_started=int(time.time()),
+                        title=nxt["title"],
+                        calendar_meeting=False,
+                        channel_id=nxt["channel_id"],
+                        team_id=nxt["team_id"],
+                    ))
+                else:
+                    # Calendar-sourced: open the meeting ON THE CALENDAR and click
+                    # "Tham gia" (the user's classes are Teams meetings on the calendar).
+                    join_meeting(Meeting(
+                        m_id=f"calendar:{nxt['title']}@{nxt['start'].isoformat()}",
+                        time_started=int(time.time()),
+                        title=nxt["title"],
+                        calendar_meeting=True,
+                    ))
+                if rt.current_meeting is not None:
+                    break
+                status.log("Lớp chưa mở để vào — thử lại sau 20 giây…")
+                status.sleep_checked(20)
+        finally:
+            rt.joining = False
 
         if rt.current_meeting is None:
             status.log("Không vào được lớp (quá giờ). Tìm buổi tiếp theo.")
