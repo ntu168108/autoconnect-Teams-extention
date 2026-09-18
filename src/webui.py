@@ -198,6 +198,8 @@ def _render_form(cfg):
     interval = _esc(cfg.get("check_interval", 10))
     join_msg = _esc(cfg.get("join_message", ""))
     discord = _esc(cfg.get("discord_webhook_url", ""))
+    ckleave = "checked" if cfg.get("leave_if_last") else ""
+    min_members = _esc(cfg.get("min_members", 3))
 
     body = f"""
 <div class="card">
@@ -271,6 +273,10 @@ def _render_form(cfg):
       </label>
       <label class="field">Discord webhook URL (tùy chọn)
         <input type="text" name="discord_webhook_url" value="{discord}">
+      </label>
+      <label class="switch"><input type="checkbox" name="leave_if_last" {ckleave}>{_icon("eye-off")} Tự rời lớp khi lớp vắng dần</label>
+      <label class="field">Số người tối thiểu để ở lại lớp (0 = tắt kiểm tra)
+        <input type="number" name="min_members" value="{min_members}" min="0">
       </label>
     </details>
 
@@ -462,6 +468,8 @@ class _Handler(BaseHTTPRequestHandler):
         cfg["check_interval"] = as_int("check_interval", 10)
         cfg["join_message"] = g("join_message")
         cfg["discord_webhook_url"] = g("discord_webhook_url")
+        cfg["leave_if_last"] = "leave_if_last" in form
+        cfg["min_members"] = as_int("min_members", 3)
 
         config_mod.save(cfg)
         _Handler.result = cfg

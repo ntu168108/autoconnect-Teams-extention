@@ -19,6 +19,12 @@ DEFAULTS = {
     "check_interval": 10,
     "join_message": "",
     "discord_webhook_url": "",
+
+    # Rời lớp sớm khi lớp vắng dần, rồi tự chờ / vào buổi tiếp theo:
+    "leave_if_last": False,          # bật kiểm tra số thành viên trong khi họp
+    "min_members": 3,                # rời lớp khi số người < giá trị này (0 = tắt)
+    "leave_threshold_number": -1,    # rời khi giảm >= N người so với đỉnh điểm (-1 = tắt)
+    "leave_threshold_percentage": -1,  # rời khi còn < N% so với đỉnh điểm (-1 = tắt)
 }
 
 

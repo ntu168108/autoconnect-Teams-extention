@@ -236,14 +236,53 @@ def join_meeting(meeting):
         rt.hangup_thread.start()
 
 
+# Read directly off the roster BUTTON, no panel needed: Teams renders the live
+# participant count either as trailing digits in its aria-label (e.g. "Người
+# tham gia, 12" / "Show participants (12)") or as a small numeric badge next
+# to the icon. Both are cheap DOM reads and survive minor UI shuffles better
+# than any specific panel selector.
+_JS_ROSTER_BADGE_COUNT = r"""
+var btn = document.querySelector(arguments[0]);
+if (!btn) return null;
+var al = btn.getAttribute('aria-label') || '';
+var m = al.match(/(\d+)\s*\)?\s*$/);
+if (m) return parseInt(m[1], 10);
+var badge = btn.querySelector('[data-tid$="badge"], .fui-Badge, [class*="badge" i]');
+if (badge) {
+  var t = (badge.textContent || '').trim();
+  if (/^\d+$/.test(t)) return parseInt(t, 10);
+}
+return null;
+"""
+
+# Fallback once the People panel is open: sum any roster-section title counts
+# (works if the old class names are still around) or, failing that, count the
+# actual participant rows rendered in the panel — the row/list-item structure
+# tends to outlive specific className/data-tid renames.
+_JS_ROSTER_PANEL_COUNT = r"""
+var total = 0, found = false;
+document.querySelectorAll("calling-roster-section .roster-list-title, [class*='roster'] [class*='list-title' i]")
+  .forEach(function(el){
+    var al = el.getAttribute('aria-label') || el.textContent || '';
+    var m = al.match(/\d+/);
+    if (m) { total += parseInt(m[0], 10); found = true; }
+  });
+if (found) return total;
+var rows = document.querySelectorAll(
+  "[data-tid='roster-participant-list'] [role='listitem'], " +
+  "[class*='roster' i] [role='listitem'], " +
+  "[data-tid^='roster-list-item']");
+return rows.length ? rows.length : null;
+"""
+
+
 def get_meeting_members():
     """
-    Count participants in the current meeting via the People panel.
-    Returns total count, or None if unavailable.
-
-    NOTE: The exact roster-panel selectors for new Teams have not been
-    confirmed yet (a 'trong-hop' DOM dump with People panel open is needed).
-    Currently falls back to None so the main loop still runs.
+    Count participants currently in the meeting. Tries the roster button's
+    own badge/aria-label first (fast, no UI disruption); if that fails, opens
+    the People panel and reads it from there. Returns the count, or None if
+    it could not be determined (the caller must treat None as "unknown", not
+    "zero" — never trigger a leave decision on it).
     """
     # If the hangup button is gone, meeting ended
     if wait_until_found(S.SEL_HANGUP, 3, print_error=False) is None:
@@ -252,42 +291,39 @@ def get_meeting_members():
         return None
 
     try:
-        rt.browser.execute_script("document.getElementById('roster-button').click()")
-    except exceptions.JavascriptException:
+        count = rt.browser.execute_script(_JS_ROSTER_BADGE_COUNT, S.SEL_ROSTER)
+    except Exception:
+        count = None
+    if isinstance(count, int):
+        return count
+
+    # Slow path: open the People panel and read it from there.
+    try:
+        rt.browser.execute_script("document.querySelector(arguments[0]).click()", S.SEL_ROSTER)
+    except Exception:
         status.log("Failed to open People panel")
         return None
 
     time.sleep(2)
-
-    # Try old-style selector first (might still match in new Teams)
-    participants_elem = wait_until_found(
-        "calling-roster-section[section-key='participantsInCall'] .roster-list-title",
-        2, print_error=False)
-    attendees_elem = wait_until_found(
-        "calling-roster-section[section-key='attendeesInMeeting'] .roster-list-title",
-        2, print_error=False)
-
-    count = None
-    if participants_elem is not None or attendees_elem is not None:
-        participants = ([int(s) for s in (participants_elem.get_attribute("aria-label") or "").split() if s.isdigit()]
-                        if participants_elem else [0])
-        attendees    = ([int(s) for s in (attendees_elem.get_attribute("aria-label") or "").split() if s.isdigit()]
-                        if attendees_elem else [0])
-        count = sum(participants + attendees)
-
-    # Close People panel
     try:
-        rt.browser.execute_script("document.getElementById('roster-button').click()")
-    except exceptions.JavascriptException:
+        count = rt.browser.execute_script(_JS_ROSTER_PANEL_COUNT)
+    except Exception:
+        count = None
+
+    # Close People panel (same button toggles it; try the "..." overflow menu
+    # as a fallback if the toolbar collapsed it under there).
+    try:
+        rt.browser.execute_script("document.querySelector(arguments[0]).click()", S.SEL_ROSTER)
+    except Exception:
         try:
             rt.browser.execute_script(
                 "document.getElementById('callingButtons-showMoreBtn').click()")
             time.sleep(1)
-            rt.browser.execute_script("document.getElementById('roster-button').click()")
-        except exceptions.JavascriptException:
+            rt.browser.execute_script("document.querySelector(arguments[0]).click()", S.SEL_ROSTER)
+        except Exception:
             pass
 
-    return count
+    return count if isinstance(count, int) else None
 
 
 def hangup():
@@ -309,27 +345,35 @@ def hangup():
 
 
 def handle_leave_threshold(current_members, total):
-    status.log(f"Current members: {current_members} / Peak: {total}")
+    status.log(f"Số người hiện tại: {current_members} / Đỉnh điểm: {total}")
     leave_num  = rt.config.get("leave_threshold_number")
     leave_pct  = rt.config.get("leave_threshold_percentage")
+    # Absolute minimum headcount: leave once the class drops below this many
+    # people. Configurable (default 3); set to 0 (or negative) to disable —
+    # this replaces what used to be a hardcoded "< 3" rule.
+    min_members = rt.config.get("min_members", 3)
+    try:
+        min_members = int(min_members)
+    except (TypeError, ValueError):
+        min_members = 3
 
     if leave_num and int(leave_num) > 0:
         if (total - current_members) >= int(leave_num):
-            status.log("Leave threshold (absolute) triggered")
+            status.log("Rời lớp: đã giảm quá số lượng tuyệt đối cấu hình")
             discord_notification("Left meeting, threshold triggered", rt.current_meeting.title)
             hangup()
             return True
 
     if leave_pct and 0 < int(leave_pct) <= 100:
         if (current_members / total) * 100 < int(leave_pct):
-            status.log("Leave threshold (percentage) triggered")
+            status.log("Rời lớp: tỉ lệ người còn lại dưới ngưỡng cấu hình")
             discord_notification("Left meeting, threshold triggered", rt.current_meeting.title)
             hangup()
             return True
 
-    if 0 < current_members < 3:
-        status.log("Last person in meeting")
-        discord_notification("Left meeting, last member", rt.current_meeting.title)
+    if min_members > 0 and 0 < current_members < min_members:
+        status.log(f"Rời lớp: chỉ còn {current_members} người (dưới mức tối thiểu {min_members})")
+        discord_notification("Left meeting, below minimum members", rt.current_meeting.title)
         hangup()
         return True
 
