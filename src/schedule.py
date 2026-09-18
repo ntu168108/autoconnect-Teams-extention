@@ -237,3 +237,5 @@ def run_schedule_loop():
             continue
 
         _stay_until_meeting_ends()
+        status.report("idle", detail="Đã rời lớp — đang kiểm tra buổi học tiếp theo…")
+        status.log("Đã rời lớp. Đang kiểm tra lịch xem có buổi học tiếp theo không…")
