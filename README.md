@@ -38,7 +38,10 @@
 - Tự đăng nhập, tự tìm cuộc họp trong **Lịch (Calendar)** hoặc **kênh (Channel)**
 - **Đếm ngược tới buổi học kế tiếp** trên Terminal, **tự vào lớp sớm N phút** (tự chọn; `0` = đúng giờ)
   - Đọc giờ từ **banner cuộc họp trong kênh** *và* **sự kiện trên Lịch Outlook**, chọn buổi gần nhất
+  - Lịch được đọc thẳng qua **API JSON của Outlook** — lấy được cả **nhiều tuần** trong ~1 giây, không phụ thuộc ngôn ngữ hiển thị. Nếu API lỗi, bot tự quay về cách đọc giao diện như cũ.
 - Tự vào họp với **camera & mic đã tắt sẵn**
+- **Nút "Vào ngay"** trên bảng theo dõi: bấm là vào thẳng buổi đó, không cần chờ đếm ngược
+- *(Tùy chọn)* Tự **rời lớp khi lớp vắng** (dưới số người tối thiểu bạn đặt) rồi **tự chờ buổi kế tiếp**
 - *(Tùy chọn)* Tự **gửi lời nhắn** vào **chat phòng họp** khi vào
 - *(Tùy chọn)* Tự **rời họp** sau X phút
 - **Giao diện cấu hình bằng web**, có chế độ **Sáng / Tối** — không cần sửa file tay
@@ -187,6 +190,7 @@ python tools/inspect_teams.py
 | `src/main.py` | Entry point: vòng đời bot, bắt lỗi thân thiện |
 | `src/schedule.py` | Vòng lặp chính: dò lịch → đếm ngược → vào lớp |
 | `src/scanner.py` | Dò lịch học từ kênh + Lịch Outlook |
+| `src/teams_api.py` | Đọc lịch nhanh qua API JSON của Outlook (có fallback) |
 | `src/joiner.py` | Vào lớp, tắt cam/mic, gửi lời nhắn, rời họp |
 | `src/browser.py` | Mở Chrome/Edge, đăng nhập, wait helpers |
 | `src/selectors_teams.py` | **Toàn bộ selector + JS của Teams** (sửa ở đây khi MS đổi UI) |

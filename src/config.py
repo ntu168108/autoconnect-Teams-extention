@@ -19,6 +19,9 @@ DEFAULTS = {
     "check_interval": 10,
     "join_message": "",
     "discord_webhook_url": "",
+    # Múi giờ gửi cho API Lịch Outlook (tên theo chuẩn Windows). Chỉ dùng cho
+    # đường đọc lịch nhanh; sai tên thì bot tự quay về cách đọc giao diện.
+    "calendar_timezone": "SE Asia Standard Time",
 
     # Rời lớp sớm khi lớp vắng dần, rồi tự chờ / vào buổi tiếp theo:
     "leave_if_last": False,          # bật kiểm tra số thành viên trong khi họp

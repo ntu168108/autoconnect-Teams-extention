@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 
 import config as config_mod
+import runtime as rt
 import status
 
 # ── Inline Lucide icons (https://lucide.dev, ISC license) ─────────────────────
@@ -143,6 +144,11 @@ button.start svg{width:18px;height:18px;}
 .sched li{display:flex;justify-content:space-between;gap:10px;padding:7px 10px;border:1px solid var(--border);
   border-radius:9px;margin-bottom:6px;font-size:13.5px;}
 .sched li .when{color:var(--muted);flex:none;}
+.sched li .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.btn-join{flex:none;padding:4px 11px;font-size:12px;font-weight:700;color:var(--on-accent);
+  background:var(--accent);border:none;border-radius:7px;cursor:pointer;}
+.btn-join:hover{filter:brightness(1.08);}
+.btn-join:disabled{opacity:.45;cursor:default;}
 .logbox{margin:10px 24px 16px;background:var(--surface);border:1px solid var(--border);border-radius:10px;
   padding:10px 12px;height:180px;overflow-y:auto;font-size:12.5px;line-height:1.55;
   font-family:Consolas,Menlo,monospace;white-space:pre-wrap;}
@@ -356,10 +362,31 @@ function render(s) {{
     s.schedule.forEach(function(m) {{
       var d = new Date(m.start*1000);
       var li = document.createElement("li");
-      var name = document.createElement("span"); name.textContent = m.title;
+      var name = document.createElement("span"); name.className = "name"; name.textContent = m.title;
       var when = document.createElement("span"); when.className = "when";
       when.textContent = d.toLocaleString("vi-VN", {{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"2-digit"}});
-      li.appendChild(name); li.appendChild(when); ul.appendChild(li);
+      li.appendChild(name); li.appendChild(when);
+      if (m.idx !== undefined && !stopped) {{
+        var btn = document.createElement("button");
+        btn.className = "btn-join"; btn.textContent = "Vào ngay";
+        btn.onclick = function() {{
+          btn.disabled = true; btn.textContent = "Đang vào…";
+          fetch("/api/join", {{
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify({{idx: m.idx}})
+          }}).then(function(r) {{ return r.json(); }}).then(function(res) {{
+            if (!res.ok) {{
+              btn.disabled = false; btn.textContent = "Vào ngay";
+              alert(res.error || "Không gửi được yêu cầu vào lớp.");
+            }}
+          }}).catch(function() {{
+            btn.disabled = false; btn.textContent = "Vào ngay";
+          }});
+        }};
+        li.appendChild(btn);
+      }}
+      ul.appendChild(li);
     }});
   }}
   var box = document.getElementById("logbox");
@@ -440,6 +467,31 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/stop":
             status.stop_requested.set()
             status.log("Đã nhận yêu cầu dừng từ trang theo dõi.")
+            self._send_json({"ok": True})
+            return
+
+        if path == "/api/join":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                idx = int(payload["idx"])
+            except (ValueError, TypeError, KeyError):
+                self._send_json({"ok": False, "error": "Yêu cầu không hợp lệ"})
+                return
+            if rt.current_meeting is not None or rt.joining:
+                self._send_json({"ok": False,
+                                 "error": "Bot đang vào/đang trong lớp — hãy đợi hoặc rời lớp trước"})
+                return
+            # Resolve to the class itself right now: a later rescan reorders
+            # rt.schedule, so a stored index could end up pointing at a
+            # different class by the time the bot reads it.
+            if not (0 <= idx < len(rt.schedule)):
+                self._send_json({"ok": False,
+                                 "error": "Buổi học không còn trong lịch"})
+                return
+            entry = rt.schedule[idx]
+            rt.join_request = entry
+            status.log(f"Đã nhận yêu cầu vào lớp ngay: {entry['title']}")
             self._send_json({"ok": True})
             return
 
