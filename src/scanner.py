@@ -62,70 +62,92 @@ def _get_channels_from_sidebar(team):
     return channels
 
 
-def get_meetings(teams):
-    """
-    For each team, navigate to it, collect channels, then check each channel
-    for an active/upcoming meeting join button.
-    """
-    for team in teams:
-        # Navigate to team card
-        switch_to_teams_tab()
-        card = wait_until_found(
-            f"[data-tid='{team.t_id}-team-card']", 5, print_error=False)
-        if card is None:
-            continue
+def _open_team(team):
+    """Navigate to a team's card and return once its sidebar is showing.
+    Returns True on success (caller can then read team.channels)."""
+    switch_to_teams_tab()
+    card = wait_until_found(
+        f"[data-tid='{team.t_id}-team-card']", 5, print_error=False)
+    if card is None:
+        return False
+    try:
         rt.browser.execute_script("arguments[0].click()", card)
-        time.sleep(2)
+    except Exception:
+        return False
+    time.sleep(2)
+    return True
 
-        # Collect channels from sidebar (element refs go stale after clicks)
-        channels = _get_channels_from_sidebar(team)
-        team.channels = channels
+
+def _open_channel(ch, settle=2):
+    """Click a channel in the sidebar (team must already be open). Returns
+    True once clicked; caller still needs to wait for whatever it expects
+    to render (join button, meeting banner, ...)."""
+    ch_btn = wait_until_found(
+        f"[data-tid='channel-list-item-text-{ch.c_id}']", 3, print_error=False)
+    if ch_btn is None:
+        return False
+    try:
+        rt.browser.execute_script("arguments[0].click()", ch_btn)
+    except Exception:
+        return False
+    time.sleep(settle)
+    return True
+
+
+def _iter_open_channels(teams):
+    """Shared walk used by both meeting discovery functions: for every team,
+    open it, load its (non-blacklisted) channels from the sidebar, then open
+    each channel in turn. Yields (team, channel) once each channel is open
+    and ready to be inspected."""
+    for team in teams:
+        if not _open_team(team):
+            continue
+
+        team.channels = _get_channels_from_sidebar(team)
         team.check_blacklist()
 
         for ch in team.channels:
             if ch.blacklisted:
                 continue
-
-            # Navigate to channel
-            ch_btn = wait_until_found(
-                f"[data-tid='channel-list-item-text-{ch.c_id}']",
-                3, print_error=False)
-            if ch_btn is None:
+            if not _open_channel(ch):
                 continue
-            try:
-                rt.browser.execute_script("arguments[0].click()", ch_btn)
-                time.sleep(2)
-            except Exception:
-                continue
+            yield team, ch
 
-            # Check for an active meeting join button
-            if wait_until_found(S.SEL_CH_JOIN_BTN, 3, print_error=False) is None:
-                continue
 
-            m_id = f"channel:{ch.c_id}"
-            if m_id in rt.already_joined_ids:
-                continue
+def get_meetings(teams):
+    """
+    For each team, navigate to it, collect channels, then check each channel
+    for an active/upcoming meeting join button.
+    """
+    for team, ch in _iter_open_channels(teams):
+        # Check for an active meeting join button
+        if wait_until_found(S.SEL_CH_JOIN_BTN, 3, print_error=False) is None:
+            continue
 
-            title = f"{team.name} → {ch.name}"
-            try:
-                banner = rt.browser.find_element(By.CSS_SELECTOR, S.SEL_MEETING_BANNER)
-                aria = banner.get_attribute("aria-label") or ""
-                # "Scheduled meeting. TITLE. DATE..."
-                parts = [p.strip() for p in aria.split(".") if p.strip()]
-                if len(parts) >= 2:
-                    title = parts[1]
-            except exceptions.NoSuchElementException:
-                pass
+        m_id = f"channel:{ch.c_id}"
+        if m_id in rt.already_joined_ids:
+            continue
 
-            rt.meetings.append(Meeting(
-                m_id=m_id,
-                time_started=int(time.time()),
-                title=title,
-                calendar_meeting=False,
-                channel_id=ch.c_id,
-                team_id=team.t_id,
-            ))
-            ch.has_meeting = True
+        title = f"{team.name} → {ch.name}"
+        try:
+            banner = rt.browser.find_element(By.CSS_SELECTOR, S.SEL_MEETING_BANNER)
+            aria = banner.get_attribute("aria-label") or ""
+            # "Scheduled meeting. TITLE. DATE..."
+            parts = [p.strip() for p in aria.split(".") if p.strip()]
+            if len(parts) >= 2:
+                title = parts[1]
+        except exceptions.NoSuchElementException:
+            pass
+
+        rt.meetings.append(Meeting(
+            m_id=m_id,
+            time_started=int(time.time()),
+            title=title,
+            calendar_meeting=False,
+            channel_id=ch.c_id,
+            team_id=team.t_id,
+        ))
+        ch.has_meeting = True
 
     # Return to teams grid after full scan
     switch_to_teams_tab()
@@ -208,49 +230,22 @@ def discover_scheduled_meetings():
     dicts: {start, title, team_id, channel_id}."""
     found = {}
     teams = get_all_teams()
-    for team in teams:
-        switch_to_teams_tab()
-        card = wait_until_found(
-            f"[data-tid='{team.t_id}-team-card']", 5, print_error=False)
-        if card is None:
-            continue
-        try:
-            rt.browser.execute_script("arguments[0].click()", card)
-        except Exception:
-            continue
-        time.sleep(2)
-
-        team.channels = _get_channels_from_sidebar(team)
-        team.check_blacklist()
-
-        for ch in team.channels:
-            if ch.blacklisted:
-                continue
-            ch_btn = wait_until_found(
-                f"[data-tid='channel-list-item-text-{ch.c_id}']", 3, print_error=False)
-            if ch_btn is None:
-                continue
+    for team, ch in _iter_open_channels(teams):
+        for banner in rt.browser.find_elements(By.CSS_SELECTOR, S.SEL_MEETING_BANNER):
             try:
-                rt.browser.execute_script("arguments[0].click()", ch_btn)
-                time.sleep(1.5)
+                aria = banner.get_attribute("aria-label") or ""
             except Exception:
                 continue
-
-            for banner in rt.browser.find_elements(By.CSS_SELECTOR, S.SEL_MEETING_BANNER):
-                try:
-                    aria = banner.get_attribute("aria-label") or ""
-                except Exception:
-                    continue
-                start = _parse_banner_time(aria)
-                if start is None:
-                    continue
-                key = (ch.c_id, start.isoformat())
-                found[key] = {
-                    "start": start,
-                    "title": f"{team.name} → {ch.name}",
-                    "team_id": team.t_id,
-                    "channel_id": ch.c_id,
-                }
+            start = _parse_banner_time(aria)
+            if start is None:
+                continue
+            key = (ch.c_id, start.isoformat())
+            found[key] = {
+                "start": start,
+                "title": f"{team.name} → {ch.name}",
+                "team_id": team.t_id,
+                "channel_id": ch.c_id,
+            }
 
     switch_to_teams_tab()
     return list(found.values())
