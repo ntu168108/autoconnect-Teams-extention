@@ -57,6 +57,15 @@ jobs:
           cat > "dist/Chạy bot.command" <<'EOF'
           #!/bin/bash
           cd "$(dirname "$0")"
+          if [ ! -w "$(pwd)" ]; then
+            echo ""
+            echo "[LOI] Khong co quyen ghi vao thu muc nay: $(pwd)"
+            echo "      -> Chuyen ca thu muc bot ra noi co quyen ghi (Desktop"
+            echo "         hoac Documents) roi chay lai."
+            echo ""
+            read -n 1 -s -r -p "Nhan phim bat ky de dong..."
+            exit 1
+          fi
           ./TeamsAutoJoiner
           echo ""
           echo "=== Bot đã dừng. Nhấn phím bất kỳ để đóng. ==="
@@ -72,6 +81,15 @@ jobs:
           cat > "dist/chay-bot.sh" <<'EOF'
           #!/usr/bin/env bash
           cd "$(dirname "$0")"
+          if [ ! -w "$(pwd)" ]; then
+            echo ""
+            echo "[LOI] Khong co quyen ghi vao thu muc nay: $(pwd)"
+            echo "      -> Chuyen ca thu muc bot ra noi co quyen ghi roi chay lai,"
+            echo "         hoac: chmod u+w \"$(pwd)\""
+            echo ""
+            read -n 1 -s -r -p "Nhan phim bat ky de dong..."
+            exit 1
+          fi
           ./TeamsAutoJoiner
           echo ""
           echo "=== Bot đã dừng. Nhấn phím bất kỳ để đóng. ==="
