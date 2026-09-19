@@ -550,7 +550,16 @@ class _Handler(BaseHTTPRequestHandler):
         cfg["leave_if_last"] = "leave_if_last" in form
         cfg["min_members"] = as_int("min_members", 3)
 
-        config_mod.save(cfg)
+        try:
+            config_mod.save(cfg)
+        except config_mod.SaveError as e:
+            # Otherwise the browser just shows "connection reset" — the
+            # traceback lands in the terminal instead of in front of the
+            # person who can actually act on it.
+            self._send_html(_doc("Không lưu được cấu hình",
+                                 f'<div class="card"><form><p style="padding:24px">'
+                                 f'⚠️ {_esc(str(e))}</p></form></div>'), code=500)
+            return
         _Handler.result = cfg
 
         self.send_response(303)          # See Other → GET /status

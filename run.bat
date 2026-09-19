@@ -79,7 +79,20 @@ if defined BROWSER (
     set "FAILED=1"
 )
 
-rem --- 4. config.json ---
+rem --- 4. Quyen ghi thu muc — bot phai luu config.json canh file chay ---
+echo test>"__wtest.tmp" 2>nul
+if exist "__wtest.tmp" (
+    del /q "__wtest.tmp" >nul 2>nul
+    echo   [OK]  Co quyen ghi vao thu muc bot
+) else (
+    echo   [LOI] Khong co quyen ghi vao thu muc nay.
+    echo         -^> Chuyen ca thu muc bot ra noi co quyen ghi ^(Desktop hoac
+    echo             Documents^) roi chay lai. Dung chay thang trong "Program
+    echo             Files" hoac tu file zip chua giai nen.
+    set "FAILED=1"
+)
+
+rem --- 5. config.json ---
 if exist "config.json" (
     echo   [OK]  config.json ton tai
 ) else (

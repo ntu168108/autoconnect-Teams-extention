@@ -102,7 +102,19 @@ if [ "$(uname -s)" = "Linux" ] && [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]
     echo "       -> Bat \"headless\": true trong config.json truoc khi chay."
 fi
 
-# 5. config.json
+# 5. Quyen ghi thu muc — bot phai luu config.json canh file chay.
+#    Bi chan khi: chay thang tu anh dia .dmg chua copy ra, thu muc chi-doc,
+#    hoac (macOS) may bi Gatekeeper cach ly ban trong khu vuc rieng.
+if [ -w "$(pwd)" ]; then
+    ok "Co quyen ghi vao thu muc bot"
+else
+    fail "Khong co quyen ghi vao thu muc: $(pwd)"
+    echo "       -> Chuyen ca thu muc bot ra noi co quyen ghi (vi du: Desktop"
+    echo "          hoac Documents) roi chay lai. Neu dang chay tu anh dia .dmg,"
+    echo "          hay keo the bot ra thu muc thuong truoc."
+fi
+
+# 6. config.json
 if [ -f "config.json" ]; then
     ok "config.json ton tai"
 else

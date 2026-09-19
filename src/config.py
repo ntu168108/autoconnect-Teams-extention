@@ -66,6 +66,18 @@ def load():
     return cfg
 
 
+class SaveError(Exception):
+    """config.json could not be written — the caller should show this
+    message rather than let the raw OSError surface as a traceback."""
+
+
 def save(cfg):
-    with open(config_path(), "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    try:
+        with open(config_path(), "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        raise SaveError(
+            f"Không ghi được config.json vào {get_root()}: {e.strerror or e}. "
+            "Hãy chuyển thư mục bot ra khỏi nơi chỉ đọc (ví dụ ảnh đĩa .dmg "
+            "chưa copy ra, hoặc thư mục không có quyền ghi) rồi thử lại."
+        ) from e
