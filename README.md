@@ -25,11 +25,11 @@
 - [Yêu cầu](#yêu-cầu)
 - [Cài đặt & chạy](#cài-đặt--chạy)
 - [Các tùy chọn cấu hình](#các-tùy-chọn-cấu-hình)
+- [Bảng theo dõi](#bảng-theo-dõi)
 - [Cách hoạt động](#cách-hoạt-động)
 - [Khắc phục sự cố](#khắc-phục-sự-cố)
 - [Dành cho người phát triển](#dành-cho-người-phát-triển)
 - [Star History](#star-history)
-- [Ghi nhận](#ghi-nhận)
 
 ---
 
