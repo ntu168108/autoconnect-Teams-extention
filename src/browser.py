@@ -15,6 +15,21 @@ import status
 from notify import discord_notification
 
 
+CHROME_PREFS = {
+    'credentials_enable_service': False,
+    'profile.default_content_setting_values.media_stream_mic': 1,
+    'profile.default_content_setting_values.media_stream_camera': 1,
+    'profile.default_content_setting_values.geolocation': 1,
+    'profile.default_content_setting_values.notifications': 1,
+    'profile': {'password_manager_enabled': False},
+}
+# NOTE: 'protocol_handler.excluded_schemes' was tried here to stop Chrome's
+# native "Open Microsoft Teams?" dialog. Chrome stores the setting but current
+# builds raise the dialog anyway, so it was removed rather than left in
+# looking like it does something. The dialog is avoided instead by never
+# loading the page that triggers it — see joiner._open_meeting_by_link.
+
+
 def init_browser():
     if rt.config.get('chrome_type') == "msedge":
         chrome_options = webdriver.EdgeOptions()
@@ -24,14 +39,7 @@ def init_browser():
     chrome_options.add_argument('--ignore-certificate-errors')
     chrome_options.add_argument('--ignore-ssl-errors')
     chrome_options.add_argument('--use-fake-ui-for-media-stream')
-    chrome_options.add_experimental_option('prefs', {
-        'credentials_enable_service': False,
-        'profile.default_content_setting_values.media_stream_mic': 1,
-        'profile.default_content_setting_values.media_stream_camera': 1,
-        'profile.default_content_setting_values.geolocation': 1,
-        'profile.default_content_setting_values.notifications': 1,
-        'profile': {'password_manager_enabled': False},
-    })
+    chrome_options.add_experimental_option('prefs', CHROME_PREFS)
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_experimental_option('excludeSwitches', ['enable-automation'])
 
@@ -49,6 +57,34 @@ def init_browser():
         if rt.config.get('chrome_type') == "chromium" and rt.config.get("chromium_binary"):
             chrome_options.binary_location = rt.config["chromium_binary"]
         rt.browser = webdriver.Chrome(options=chrome_options)
+
+    _place_beside_dashboard()
+
+
+def _place_beside_dashboard():
+    """Put the automated window to the RIGHT of the dashboard window.
+
+    Both are Chrome windows, and the one selenium drives is raised whenever it
+    joins a class — landing right on top of the dashboard the user is watching.
+    Sitting them side by side keeps both readable. Headless has no window to
+    place, and a screen too narrow to hold both keeps the old behaviour of
+    simply making the window big enough."""
+    if rt.config.get('headless'):
+        return
+
+    import webui
+
+    left = webui.DASHBOARD_WIDTH + 10
+    try:
+        screen_w = rt.browser.execute_script("return window.screen.availWidth;") or 0
+        screen_h = rt.browser.execute_script("return window.screen.availHeight;") or 0
+    except Exception:
+        screen_w = screen_h = 0
+
+    if screen_w and screen_w - left >= 1000:
+        rt.browser.set_window_position(left, 0)
+        rt.browser.set_window_size(screen_w - left, screen_h or 900)
+        return
 
     w = rt.browser.get_window_size()
     if w['width'] < 1200:

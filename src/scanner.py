@@ -13,7 +13,7 @@ import status
 import teams_api
 from browser import (switch_to_calendar_tab, switch_to_teams_tab,
                      wait_until_found)
-from models import Channel, Meeting, Team
+from models import Channel, Team
 
 
 def get_all_teams():
@@ -115,94 +115,11 @@ def _iter_open_channels(teams):
             yield team, ch
 
 
-def get_meetings(teams):
-    """
-    For each team, navigate to it, collect channels, then check each channel
-    for an active/upcoming meeting join button.
-    """
-    for team, ch in _iter_open_channels(teams):
-        # Check for an active meeting join button
-        if wait_until_found(S.SEL_CH_JOIN_BTN, 3, print_error=False) is None:
-            continue
-
-        m_id = f"channel:{ch.c_id}"
-        if m_id in rt.already_joined_ids:
-            continue
-
-        title = f"{team.name} → {ch.name}"
-        try:
-            banner = rt.browser.find_element(By.CSS_SELECTOR, S.SEL_MEETING_BANNER)
-            aria = banner.get_attribute("aria-label") or ""
-            # "Scheduled meeting. TITLE. DATE..."
-            parts = [p.strip() for p in aria.split(".") if p.strip()]
-            if len(parts) >= 2:
-                title = parts[1]
-        except exceptions.NoSuchElementException:
-            pass
-
-        rt.meetings.append(Meeting(
-            m_id=m_id,
-            time_started=int(time.time()),
-            title=title,
-            calendar_meeting=False,
-            channel_id=ch.c_id,
-            team_id=team.t_id,
-        ))
-        ch.has_meeting = True
-
-    # Return to teams grid after full scan
-    switch_to_teams_tab()
-
-
-def get_calendar_meetings():
-    """Scan the Outlook calendar (embedded iframe) for Teams meeting events."""
-    switch_to_calendar_tab()
-    time.sleep(4)
-
-    iframe = wait_until_found(S.SEL_CAL_IFRAME, 15, print_error=False)
-    if iframe is None:
-        status.log("Calendar iframe not found (is the Calendar tab open?)")
-        return
-
-    # The Outlook calendar inside the iframe renders its events asynchronously,
-    # so poll until events appear (or the calendar is loaded with none).
-    rt.browser.switch_to.frame(iframe)
-    labels = []
-    try:
-        deadline = time.time() + 18
-        ready_since = None
-        while time.time() < deadline:
-            try:
-                n = rt.browser.execute_script(
-                    'return document.querySelectorAll(\'button,[role="button"]\').length;') or 0
-                labels = rt.browser.execute_script(S._JS_CAL_EVENTS) or []
-            except Exception:
-                n, labels = 0, []
-            if labels:
-                break
-            if n > 25:               # OWA calendar grid has rendered
-                if ready_since is None:
-                    ready_since = time.time()
-                elif time.time() - ready_since > 4:   # loaded, still no events
-                    break
-            time.sleep(1.5)
-    finally:
-        rt.browser.switch_to.default_content()
-
-    for label in labels:
-        # aria-label looks like "TITLE, 12:30 AM to 1:00 AM, Monday, ... , Microsoft Teams ..."
-        title = label.split(",")[0].strip() or "Calendar meeting"
-        m_id = "calendar:" + label
-        if m_id in rt.already_joined_ids:
-            continue
-        mtg = Meeting(
-            m_id=m_id,
-            time_started=int(time.time()),
-            title=title,
-            calendar_meeting=True,
-        )
-        mtg.cal_label = label
-        rt.meetings.append(mtg)
+# Month names as the English UI writes them, shared by the channel-banner and
+# the calendar parsers below.
+_EN_MONTHS = {m: i + 1 for i, m in enumerate(
+    ("january", "february", "march", "april", "may", "june", "july",
+     "august", "september", "october", "november", "december"))}
 
 
 # Channel meeting banner aria-label (Vietnamese) looks like:
@@ -212,13 +129,32 @@ def get_calendar_meetings():
 # be embedded in the title (e.g. "Ngày 03.02.2026" / "Lúc 07h15").
 _BANNER_DT_RE = re.compile(r'(\d{1,2})\s+tháng\s+(\d{1,2}),\s*(\d{4})\s+(\d{1,2}):(\d{2})')
 
+# The same banner on an English-locale account reads:
+#   "Scheduled meeting. <TITLE>. Monday, February 9, 2026 12:30 PM. Press enter…"
+# Month name first, and a 12-hour clock with AM/PM.
+_BANNER_DT_EN_RE = re.compile(
+    r'(' + '|'.join(_EN_MONTHS) + r')\s+(\d{1,2}),\s*(\d{4})\s+'
+    r'(\d{1,2}):(\d{2})\s*(AM|PM)', re.IGNORECASE)
+
 
 def _parse_banner_time(aria):
-    """Return a datetime for a scheduled-meeting banner aria-label, or None."""
-    m = _BANNER_DT_RE.search(aria or "")
-    if not m:
-        return None
-    day, month, year, hour, minute = (int(x) for x in m.groups())
+    """Return a datetime for a scheduled-meeting banner aria-label, or None.
+    Handles both the Vietnamese and the English rendering of the banner."""
+    aria = aria or ""
+    m = _BANNER_DT_RE.search(aria)
+    if m:
+        day, month, year, hour, minute = (int(x) for x in m.groups())
+    else:
+        m = _BANNER_DT_EN_RE.search(aria)
+        if not m:
+            return None
+        month = _EN_MONTHS[m.group(1).lower()]
+        day, year = int(m.group(2)), int(m.group(3))
+        hour, minute = int(m.group(4)), int(m.group(5))
+        if m.group(6).upper() == "PM" and hour != 12:
+            hour += 12
+        elif m.group(6).upper() == "AM" and hour == 12:
+            hour = 0
     try:
         return datetime(year, month, day, hour, minute)
     except ValueError:
@@ -259,9 +195,6 @@ def discover_scheduled_meetings():
 # SA/CH (VI) or AM/PM (EN), and the date puts the month first.
 _CAL_TIME_RE = re.compile(r'(\d{1,2}):(\d{2})\s*(SA|CH|AM|PM)', re.IGNORECASE)
 _CAL_DATE_RE = re.compile(r'Tháng\s+(\d{1,2})\s+(\d{1,2}),\s*(\d{4})')
-_EN_MONTHS = {m: i + 1 for i, m in enumerate(
-    ("january", "february", "march", "april", "may", "june", "july",
-     "august", "september", "october", "november", "december"))}
 _CAL_DATE_EN_RE = re.compile(
     r'(' + '|'.join(_EN_MONTHS) + r')\s+(\d{1,2}),\s*(\d{4})', re.IGNORECASE)
 

@@ -22,6 +22,13 @@ DEFAULTS = {
     # Múi giờ gửi cho API Lịch Outlook (tên theo chuẩn Windows). Chỉ dùng cho
     # đường đọc lịch nhanh; sai tên thì bot tự quay về cách đọc giao diện.
     "calendar_timezone": "SE Asia Standard Time",
+    # Chờ tối đa bao lâu để bắt được token của Outlook ở lần quét đầu tiên.
+    # Các lần sau không chờ lại, vì token thường đã có sẵn.
+    "token_wait_seconds": 10,
+
+    # Lớp đã bắt đầu bao lâu thì coi như đã tan, khi không biết giờ kết thúc
+    # (đường đọc lịch qua API có sẵn giờ kết thúc nên không cần tới mốc này):
+    "stale_after_hours": 3,
 
     # Rời lớp sớm khi lớp vắng dần, rồi tự chờ / vào buổi tiếp theo:
     "leave_if_last": False,          # bật kiểm tra số thành viên trong khi họp

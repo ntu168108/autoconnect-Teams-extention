@@ -4,6 +4,7 @@ send the optional join message, leave, and count participants."""
 import random
 import time
 from threading import Timer
+from urllib.parse import quote
 
 from selenium.common import exceptions
 from selenium.webdriver.common.by import By
@@ -12,28 +13,9 @@ from selenium.webdriver.common.keys import Keys
 import runtime as rt
 import selectors_teams as S
 import status
-from browser import (switch_to_calendar_tab, switch_to_teams_tab,
+from browser import (browser_dead, switch_to_calendar_tab, switch_to_teams_tab,
                      wait_present, wait_until_found)
 from notify import discord_notification
-
-
-def decide_meeting():
-    rt.meetings = [m for m in rt.meetings if not m.calendar_blacklisted]
-    if not rt.meetings:
-        return None
-
-    rt.meetings.sort(key=lambda x: x.time_started, reverse=True)
-    newest_time = rt.meetings[0].time_started
-
-    newest = [m for m in rt.meetings if m.time_started >= newest_time]
-
-    candidate = newest[0]
-    if (rt.current_meeting is None
-            or candidate.time_started > rt.current_meeting.time_started
-            or candidate.m_id != rt.current_meeting.m_id) \
-            and candidate.m_id not in rt.already_joined_ids:
-        return candidate
-    return None
 
 
 def _prejoin_turn_off_camera():
@@ -69,6 +51,93 @@ def _prejoin_mute_mic():
     if mic_on:
         rt.browser.execute_script("arguments[0].click()", inp)
         status.log("Microphone muted")
+
+
+def _open_meeting_by_link(meeting):
+    """Open the class through its own Teams join link and stop at the pre-join
+    screen. Returns False if we do not have the ids, or the screen never came.
+
+    Preferred over hunting for the event in the rendered calendar: the calendar
+    only shows the week on screen and has to be matched by title text, whereas
+    the ids come straight from the calendar API and address the meeting
+    exactly. It costs a page load, so the caller keeps the calendar route as
+    the fallback."""
+    thread_id = getattr(meeting, "thread_id", None)
+    if not thread_id:
+        return False
+
+    reply_id = getattr(meeting, "reply_id", None) or 0
+    # The "_#" segment loads the web client straight away. The plain
+    # /l/meetup-join/ form instead serves Teams' launcher page, which embeds an
+    # <iframe src="msteams:..."> to hand off to the desktop app — and that
+    # makes Chrome raise a native "Open Microsoft Teams?" dialog that sits over
+    # the window and cannot be dismissed from selenium.
+    url = (f"https://teams.microsoft.com/_#/l/meetup-join/"
+           f"{quote(thread_id, safe='')}/{reply_id}")
+    status.log("Đang mở lớp bằng link trực tiếp…")
+    try:
+        rt.browser.get(url)
+    except Exception as e:
+        if browser_dead(e):
+            raise
+        status.log(f"Không mở được link lớp: {str(e).splitlines()[0]}")
+        _return_to_teams()
+        return False
+
+    # A meetup-join link can land in several different places, so work out
+    # which one we got and react, rather than assuming it opened the class:
+    #   * the pre-join screen            → done
+    #   * Teams' launcher page           → press "continue in this browser"
+    #   * the Teams app on some other    → the deep link did not carry through;
+    #     view (home, teams grid, …)       hand over to the calendar route, and
+    #                                      crucially do NOT reload, because the
+    #                                      app we need is already loaded
+    #   * anything else / nothing        → reload Teams so the fallback has an
+    #                                      app to work with
+    clicked_web = False
+    app_ready_since = None
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if wait_until_found(S.SEL_PREJOIN_SCREEN, 3, print_error=False) is not None:
+            return True
+
+        if not clicked_web:
+            btn = wait_until_found(S.SEL_LAUNCHER_JOIN_WEB, 2, print_error=False)
+            if btn is not None:
+                status.log("Bỏ qua trang trung gian — tiếp tục trên trình duyệt này.")
+                rt.browser.execute_script("arguments[0].click()", btn)
+                clicked_web = True
+                continue
+
+        if wait_until_found(S.SEL_PAGE_READY, 2, print_error=False) is not None:
+            # Teams is up. Give the class a grace period to open on its own
+            # before deciding the deep link simply did not take.
+            if app_ready_since is None:
+                app_ready_since = time.time()
+            elif time.time() - app_ready_since > 20:
+                status.log("Link chỉ mở được Teams chứ không vào thẳng lớp — "
+                           "chuyển qua Lịch (không phải tải lại).")
+                return False
+
+    status.log("Link trực tiếp không mở được màn hình vào lớp — thử qua Lịch.")
+    _return_to_teams()
+    return False
+
+
+def _return_to_teams():
+    """Go back to the Teams app after a failed link attempt.
+
+    The link navigates the whole window away, so the calendar fallback would
+    otherwise run against the launcher page and fail with 'Calendar iframe not
+    found' — the fallback needs the app back before it can do anything."""
+    try:
+        rt.browser.get("https://teams.microsoft.com")
+    except Exception as e:
+        if browser_dead(e):
+            raise
+        return
+    if wait_until_found(S.SEL_PAGE_READY, 60, print_error=False) is None:
+        status.log("Teams tải lại chậm sau khi thử link — sẽ thử lại ở vòng sau.")
 
 
 def _open_calendar_meeting(meeting):
@@ -132,14 +201,28 @@ def _open_meeting_chat():
     return True
 
 
+def _cancel_auto_leave():
+    """Kill any pending auto-leave timer.
+
+    A class that ends on its own never goes through hangup(), so its timer
+    outlives it. Left armed, it fires mid-way through a LATER class and hangs
+    that one up early — so clear it before arming a new one."""
+    if rt.hangup_thread is not None:
+        rt.hangup_thread.cancel()
+        rt.hangup_thread = None
+
+
 def join_meeting(meeting):
     hangup()
+    _cancel_auto_leave()
 
     # ── Reach the pre-join screen ──────────────────────────────────────────
     if meeting.calendar_meeting:
-        if not _open_calendar_meeting(meeting):
+        # Its own join link first — exact, and not limited to the calendar week
+        # currently on screen. Falls back to clicking the event in the calendar.
+        if not (_open_meeting_by_link(meeting) or _open_calendar_meeting(meeting)):
             return
-        # _open_calendar_meeting already clicked Join inside the iframe.
+        # Either route leaves us on (or heading to) the pre-join screen.
     else:
         # Navigate to the right team then the right channel
         switch_to_teams_tab()
@@ -191,7 +274,6 @@ def join_meeting(meeting):
     rt.browser.execute_script("arguments[0].click()", join_now)
 
     rt.current_meeting = meeting
-    rt.already_joined_ids.append(meeting.m_id)
 
     # Optional join message. new Teams uses a CKEditor message box, so the text
     # must be TYPED (send_keys) — setting textContent directly does not update
@@ -337,8 +419,7 @@ def hangup():
         discord_notification("Left Meeting", rt.current_meeting.title)
         rt.current_meeting = None
         status.report("idle", detail="Đã rời lớp")
-        if rt.hangup_thread:
-            rt.hangup_thread.cancel()
+        _cancel_auto_leave()
         return True
     except exceptions.NoSuchElementException:
         return False
@@ -346,6 +427,13 @@ def hangup():
 
 def handle_leave_threshold(current_members, total):
     status.log(f"Số người hiện tại: {current_members} / Đỉnh điểm: {total}")
+    # A count of 0 means the roster could not be read (we are in the call, so
+    # there is always at least one person). Acting on it would divide by zero
+    # in the percentage rule below, and would make every other rule fire and
+    # drop us out of a class that is running perfectly well.
+    if current_members <= 0 or total <= 0:
+        return False
+
     leave_num  = rt.config.get("leave_threshold_number")
     leave_pct  = rt.config.get("leave_threshold_percentage")
     # Absolute minimum headcount: leave once the class drops below this many

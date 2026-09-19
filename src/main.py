@@ -4,7 +4,7 @@ All failure modes end with a short Vietnamese message, never a traceback."""
 
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from getpass import getpass
 
 import config as config_mod
@@ -12,6 +12,7 @@ import runtime as rt
 import status
 import webui
 from browser import browser_dead, open_and_login
+from joiner import hangup
 from notify import discord_notification
 from schedule import run_schedule_loop
 
@@ -66,7 +67,9 @@ if __name__ == "__main__":
         run_at = datetime.strptime(rt.config["run_at_time"], "%H:%M").replace(
             year=now.year, month=now.month, day=now.day)
         if run_at.time() < now.time():
-            run_at = run_at.replace(day=now.day + 1)
+            # Not .replace(day=now.day + 1): on the last day of a month that
+            # asks for day 32 and raises, before any error handling is in place.
+            run_at += timedelta(days=1)
         delay = (run_at - now).total_seconds()
         status.log(f"Chờ đến {run_at} ({int(delay)} giây)")
         time.sleep(delay)
@@ -86,9 +89,11 @@ if __name__ == "__main__":
             status.log(f"Lỗi không mong muốn: {e}")
             raise
     finally:
+        # The dashboard's confirm box promises we leave the class first, so
+        # actually hang up instead of just killing the window out from under
+        # the call.
         try:
-            if rt.browser:
-                rt.browser.quit()
+            hangup()
         except Exception:
             pass
         if rt.hangup_thread:
@@ -96,6 +101,11 @@ if __name__ == "__main__":
                 rt.hangup_thread.cancel()
             except Exception:
                 pass
+        try:
+            if rt.browser:
+                rt.browser.quit()
+        except Exception:
+            pass
         if exit_msg:
             status.log(exit_msg)
         status.report("stopped", detail=exit_msg or "Bot đã dừng.")
@@ -103,4 +113,7 @@ if __name__ == "__main__":
             discord_notification("Browser closed", "Thank you!")
         except Exception:
             pass
-        time.sleep(3)   # let the dashboard pick up the 'stopped' state
+        # Let the dashboard show the final state and run its own close, then
+        # clear away the window and the local server this run started.
+        time.sleep(8)
+        webui.close_app_window()

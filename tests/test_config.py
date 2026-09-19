@@ -12,10 +12,17 @@ def test_root_is_repo_root_when_not_frozen():
     assert os.path.isfile(os.path.join(root, "requirements.txt"))
 
 
-def test_root_is_exe_dir_when_frozen(monkeypatch):
+def test_root_is_exe_dir_when_frozen(monkeypatch, tmp_path):
+    # config.json must sit next to the executable in a PyInstaller build: the
+    # bundle's own directory is a temp one that is deleted on exit.
+    # Build the path with the running OS's separator — a hardcoded Windows
+    # path makes this fail on macOS/Linux for reasons that have nothing to do
+    # with what is being tested.
+    exe_dir = tmp_path / "apps" / "bot"
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", r"C:\apps\bot\TeamsAutoJoiner.exe")
-    assert config_mod.get_root() == os.path.abspath(r"C:\apps\bot")
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "TeamsAutoJoiner"))
+
+    assert config_mod.get_root() == str(exe_dir)
 
 
 def test_load_merges_defaults(tmp_path, monkeypatch):

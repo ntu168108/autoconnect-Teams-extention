@@ -16,6 +16,11 @@ jobs:
             zip: TeamsAutoJoiner-Windows.zip
           - os: macos-latest
             zip: TeamsAutoJoiner-macOS.zip
+          # Bản Linux dựng trên ubuntu-22.04 (không phải -latest) để chạy được
+          # trên cả các bản phân phối cũ hơn: PyInstaller nhúng glibc của máy
+          # build, nên build trên bản mới sẽ không chạy trên bản cũ.
+          - os: ubuntu-22.04
+            zip: TeamsAutoJoiner-Linux.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +63,21 @@ jobs:
           read -n 1 -s -r
           EOF
           chmod +x "dist/Chạy bot.command" dist/TeamsAutoJoiner
+          cd dist && zip -r "../${{ matrix.zip }}" .
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cp config.json.example packaging/HUONG-DAN.txt dist/
+          cat > "dist/chay-bot.sh" <<'EOF'
+          #!/usr/bin/env bash
+          cd "$(dirname "$0")"
+          ./TeamsAutoJoiner
+          echo ""
+          echo "=== Bot đã dừng. Nhấn phím bất kỳ để đóng. ==="
+          read -n 1 -s -r
+          EOF
+          chmod +x dist/chay-bot.sh dist/TeamsAutoJoiner
           cd dist && zip -r "../${{ matrix.zip }}" .
 
       - name: Upload to release

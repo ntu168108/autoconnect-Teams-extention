@@ -21,6 +21,11 @@ SEL_CH_JOIN_BTN     = "button[data-tid='pre-state-schedule-meeting-join-button']
 SEL_MEETING_BANNER  = "[data-tid='pre-state-schedule-meeting-banner-renderer']"
 SEL_CAL_IFRAME      = "iframe[data-tid='hwc-iframe'], iframe[title='Calendar']"
 SEL_PREJOIN_SCREEN  = "[data-tid='calling-prejoin-screen']"
+# A meetup-join link does not open the class directly: it lands on Teams'
+# launcher page, which asks whether to use the desktop app or this browser.
+# 'joinOnWeb' is the "continue in this browser" button; never click its
+# sibling 'joinInApp', which hands off to the desktop client and strands us.
+SEL_LAUNCHER_JOIN_WEB = "button[data-tid='joinOnWeb']"
 SEL_PREJOIN_JOIN    = "button[data-tid='prejoin-join-button']"
 SEL_TOGGLE_VIDEO    = "input[data-tid='toggle-video']"
 SEL_TOGGLE_MUTE     = "input[data-tid='toggle-mute']"
@@ -29,20 +34,6 @@ SEL_INCALL_MIC      = "button#microphone-button"
 SEL_HANGUP          = "button[data-tid='hangup-main-btn']"
 SEL_ROSTER          = "button#roster-button"
 SEL_CALL_DURATION   = "[data-tid='call-duration']"
-
-# ── JS run INSIDE the calendar (Outlook) iframe ───────────────────────────────
-# new Teams Calendar is Outlook embedded in an iframe. Teams-meeting events have
-# an aria-label containing "Microsoft Teams". Clicking an event opens a peek with
-# a "Join" button (visible text exactly "Join").
-_JS_CAL_EVENTS = r"""
-var out=[], seen={};
-var els=document.querySelectorAll('button,[role="button"],div[role="button"]');
-for(var i=0;i<els.length;i++){
-  var al=els[i].getAttribute('aria-label')||'';
-  if(al.toLowerCase().indexOf('microsoft teams')>=0 && !seen[al]){seen[al]=1;out.push(al);}
-}
-return out;
-"""
 
 _JS_CLICK_EVENT = r"""
 // Click a calendar event. `want` is the event title; an event's aria-label

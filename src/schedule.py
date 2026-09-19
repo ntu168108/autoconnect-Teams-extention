@@ -7,13 +7,11 @@ from datetime import datetime, timedelta
 import runtime as rt
 import selectors_teams as S
 import status
-from browser import browser_dead, switch_to_teams_tab, wait_until_found
-from joiner import (decide_meeting, get_meeting_members,
-                    handle_leave_threshold, hangup, join_meeting)
+from browser import browser_dead, wait_until_found
+from joiner import get_meeting_members, handle_leave_threshold, join_meeting
 from models import Meeting
 from notify import discord_notification
-from scanner import (_discover_calendar_events, discover_scheduled_meetings,
-                     get_all_teams, get_meetings)
+from scanner import _discover_calendar_events, discover_scheduled_meetings
 
 
 def _short_err(e):
@@ -48,6 +46,37 @@ def _key(m):
     return (m.get("channel_id") or m.get("title"), m["start"].isoformat())
 
 
+def _pick_order(schedule, now):
+    """Order the scanned classes by what the bot should go to next.
+
+    A class already in progress comes first — the one that started most
+    recently, i.e. the class happening right now — then the classes still to
+    come, soonest first. Sorting purely by start time would put a class that
+    began nearly three hours ago (and has since ended) ahead of the one
+    actually running.
+
+    A class is dropped once it has finished. The calendar API gives a real end
+    time; the scraped path does not, so those fall back to assuming a class
+    runs no longer than `stale_after_hours`.
+    """
+    stale_after = timedelta(hours=max(
+        int(rt.config.get("stale_after_hours", 3) or 3), 1))
+
+    live, later = [], []
+    for m in schedule:
+        if _key(m) in rt.handled:
+            continue
+        end = m.get("end")
+        if m["start"] > now:
+            later.append(m)
+        elif (end > now) if end is not None else (m["start"] >= now - stale_after):
+            live.append(m)
+
+    live.sort(key=lambda m: m["start"], reverse=True)   # nearest to now first
+    later.sort(key=lambda m: m["start"])
+    return live + later
+
+
 def _take_join_request():
     """Pop the class the user clicked 'Vào lớp ngay' on, if any. The dashboard
     resolves the click to the class itself, so this is never a stale index."""
@@ -59,19 +88,6 @@ def _take_join_request():
         status.log(f"Bỏ qua yêu cầu vào lại buổi đã học: {entry['title']}")
         return None
     return entry
-
-
-def _join_live_channel_meeting():
-    """At class time, scan the channels for a meeting that is open right now and
-    join it. Used for calendar-sourced class times (which carry no channel)."""
-    rt.meetings = []
-    teams = get_all_teams()
-    if teams:
-        get_meetings(teams)
-    to_join = decide_meeting()
-    if to_join is not None:
-        join_meeting(to_join)
-    return rt.current_meeting is not None
 
 
 def _countdown_until(meeting, join_at, max_seconds):
@@ -199,17 +215,12 @@ def run_schedule_loop():
 
         rt.schedule = sorted(schedule, key=lambda m: m["start"])
         status.report(schedule=[
-            {"idx": i, "title": m["title"], "start": m["start"].timestamp()}
+            {"idx": i, "title": m["title"], "start": m["start"].timestamp(),
+             "end": m["end"].timestamp() if m.get("end") else None}
             for i, m in enumerate(rt.schedule)])
 
         now = datetime.now()
-        # Keep upcoming meetings, plus ones that started within the last 3h (a
-        # class may still be ongoing). Channels also keep past sessions — ignore
-        # those, and ignore any session we have already handled this run.
-        upcoming = sorted(
-            (m for m in schedule
-             if m["start"] >= now - timedelta(hours=3) and _key(m) not in rt.handled),
-            key=lambda m: m["start"])
+        upcoming = _pick_order(schedule, now)
 
         if not upcoming:
             mins = rescan_seconds // 60
@@ -246,10 +257,19 @@ def run_schedule_loop():
         # Retry until joined or 15 min past the scheduled start (the teacher may
         # open the meeting a little late). A channel-sourced item knows its exact
         # channel; a calendar-sourced item only knows the time, so we scan the
-        # channels for whatever class is open right now. A class the user asked
-        # for by hand gets its 15 minutes counted from the click instead.
-        deadline = (datetime.now() if manual is not None else nxt["start"]) \
+        # channels for whatever class is open right now.
+        #
+        # Count those 15 minutes from now for a class that has already started
+        # — one the user clicked, or one already in progress that we are only
+        # now catching up with. Measuring from its start would put the deadline
+        # in the past, so the retry loop below would not run even once and the
+        # class would be skipped outright. Never keep trying past the end of
+        # the class, when we know it.
+        started_already = manual is not None or nxt["start"] <= datetime.now()
+        deadline = (datetime.now() if started_already else nxt["start"]) \
             + timedelta(minutes=15)
+        if nxt.get("end") is not None:
+            deadline = min(deadline, nxt["end"])
         # rt.current_meeting only goes non-None once we are actually in the
         # call, which is a good half-minute into join_meeting(); the flag marks
         # the whole attempt so the dashboard can refuse clicks meanwhile.
@@ -257,25 +277,36 @@ def run_schedule_loop():
         try:
             while datetime.now() < deadline and rt.current_meeting is None:
                 status.check_stop()
-                if nxt.get("channel_id"):
-                    # Channel-sourced: navigate to that channel and click its Join.
-                    join_meeting(Meeting(
-                        m_id=f"channel:{nxt['channel_id']}",
-                        time_started=int(time.time()),
-                        title=nxt["title"],
-                        calendar_meeting=False,
-                        channel_id=nxt["channel_id"],
-                        team_id=nxt["team_id"],
-                    ))
-                else:
-                    # Calendar-sourced: open the meeting ON THE CALENDAR and click
-                    # "Tham gia" (the user's classes are Teams meetings on the calendar).
-                    join_meeting(Meeting(
-                        m_id=f"calendar:{nxt['title']}@{nxt['start'].isoformat()}",
-                        time_started=int(time.time()),
-                        title=nxt["title"],
-                        calendar_meeting=True,
-                    ))
+                # Teams re-renders constantly, so an element located a moment
+                # ago can be stale by the time we click it. Swallow that the
+                # same way the scans above do: retry on the next pass rather
+                # than letting one hiccup end the whole run.
+                try:
+                    if nxt.get("channel_id"):
+                        # Channel-sourced: navigate to that channel and click its Join.
+                        join_meeting(Meeting(
+                            m_id=f"channel:{nxt['channel_id']}",
+                            title=nxt["title"],
+                            calendar_meeting=False,
+                            channel_id=nxt["channel_id"],
+                            team_id=nxt["team_id"],
+                        ))
+                    else:
+                        # Calendar-sourced: open the meeting ON THE CALENDAR and click
+                        # "Tham gia" (the user's classes are Teams meetings on the calendar).
+                        join_meeting(Meeting(
+                            m_id=f"calendar:{nxt['title']}@{nxt['start'].isoformat()}",
+                            title=nxt["title"],
+                            calendar_meeting=True,
+                            thread_id=nxt.get("cid"),
+                            reply_id=nxt.get("rid"),
+                        ))
+                except status.BotStopped:
+                    raise
+                except Exception as e:
+                    if browser_dead(e):
+                        raise
+                    status.log(f"Lỗi khi vào lớp: {_short_err(e)}")
                 if rt.current_meeting is not None:
                     break
                 status.log("Lớp chưa mở để vào — thử lại sau 20 giây…")
@@ -287,6 +318,16 @@ def run_schedule_loop():
             status.log("Không vào được lớp (quá giờ). Tìm buổi tiếp theo.")
             continue
 
-        _stay_until_meeting_ends()
+        try:
+            _stay_until_meeting_ends()
+        except status.BotStopped:
+            raise
+        except Exception as e:
+            if browser_dead(e):
+                raise
+            # Losing track of the call is not a reason to end the run: drop the
+            # meeting and go back to scanning for the next class.
+            status.log(f"Lỗi khi đang trong lớp: {_short_err(e)}")
+            rt.current_meeting = None
         status.report("idle", detail="Đã rời lớp — đang kiểm tra buổi học tiếp theo…")
         status.log("Đã rời lớp. Đang kiểm tra lịch xem có buổi học tiếp theo không…")

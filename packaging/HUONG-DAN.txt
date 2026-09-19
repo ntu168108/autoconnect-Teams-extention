@@ -1,20 +1,92 @@
-TEAMS AUTO-JOINER — HƯỚNG DẪN NHANH
+===============================================================
+  TEAMS AUTO-JOINER — HƯỚNG DẪN NHANH
+  Tự động vào lớp Microsoft Teams theo lịch học
+===============================================================
+
+--------------------------------------------------------------
+BƯỚC 1 — CHẠY ỨNG DỤNG
+--------------------------------------------------------------
 
 WINDOWS:
- 1. Double-click TeamsAutoJoiner.exe
- 2. Nếu Windows hiện cảnh báo xanh "Windows protected your PC":
-    bấm "More info" → "Run anyway" (app chưa mua chữ ký số, không phải virus).
- 3. Form cấu hình hiện ra → điền Email/Mật khẩu → bấm Bắt đầu.
+  1. Double-click  TeamsAutoJoiner.exe
+  2. Nếu Windows hiện cảnh báo xanh "Windows protected your PC":
+     bấm "More info" -> "Run anyway".
+     (App chưa mua chữ ký số nên Windows cảnh báo, không phải virus.)
 
 MACOS:
- 1. Double-click "Chạy bot.command"
- 2. Lần đầu nếu bị chặn: chuột phải vào file → Open → Open.
-    (Hoặc System Settings → Privacy & Security → Open Anyway)
- 3. Form cấu hình hiện ra → điền Email/Mật khẩu → bấm Bắt đầu.
+  1. Double-click  "Chạy bot.command"
+  2. Lần đầu bị chặn: chuột phải vào file -> Open -> Open.
+     (Hoặc System Settings -> Privacy & Security -> Open Anyway)
 
-LƯU Ý:
- - Cần có Google Chrome hoặc Microsoft Edge trên máy.
- - Đừng bấm gì vào cửa sổ Chrome mà bot mở.
- - Theo dõi bot ở trang "Bảng theo dõi" (tự mở trong trình duyệt).
- - Muốn dừng: bấm nút "Dừng bot" trên trang theo dõi.
- - File config.json (cạnh file chạy) chứa mật khẩu của bạn — KHÔNG gửi cho ai.
+LINUX:
+  1. Mở Terminal trong thư mục vừa giải nén.
+  2. Chạy:   ./chay-bot.sh
+     Nếu báo không có quyền:   chmod +x chay-bot.sh TeamsAutoJoiner
+
+--------------------------------------------------------------
+BƯỚC 2 — ĐIỀN THÔNG TIN
+--------------------------------------------------------------
+
+  Form cấu hình sẽ tự mở ra. Điền Email + Mật khẩu Teams,
+  chọn "Chỉ Lịch" (nhanh nhất), rồi bấm "Bắt đầu".
+
+  Nếu trường bạn bắt xác thực 2 lớp (MFA/OTP): bot sẽ chờ,
+  bạn tự hoàn tất trong cửa sổ Chrome mà bot mở ra.
+
+--------------------------------------------------------------
+BƯỚC 3 — ĐỂ BOT CHẠY
+--------------------------------------------------------------
+
+  Sau khi bấm Bắt đầu, trang chuyển thành BẢNG THEO DÕI.
+  Bot mở 2 cửa sổ nằm cạnh nhau:
+
+     [ Bảng theo dõi ]  |  [ Cửa sổ Teams của bot ]
+       bên trái         |         bên phải
+
+  * ĐỪNG BẤM GÌ vào cửa sổ Teams bên phải — bot đang thao tác.
+  * Cứ để cả hai cửa sổ mở. Bot sẽ tự đếm ngược và vào lớp.
+  * Muốn vào ngay một buổi: bấm nút "Vào ngay" ở buổi đó.
+  * Muốn dừng: bấm "Dừng bot" — bot rời lớp, đóng Chrome
+    và tự đóng luôn bảng theo dõi.
+
+--------------------------------------------------------------
+YÊU CẦU
+--------------------------------------------------------------
+
+  * Cần có Google Chrome, Microsoft Edge hoặc Chromium.
+    (Linux: sudo apt install chromium-browser)
+  * Buổi học phải có trên Lịch Outlook hoặc trong kênh lớp
+    thì bot mới dò ra được.
+
+--------------------------------------------------------------
+GẶP TRỤC TRẶC?
+--------------------------------------------------------------
+
+  Xem khung "Nhật ký hoạt động" trên bảng theo dõi trước tiên —
+  bot ghi lại nó đang làm gì.
+
+  * "API Lịch trả lỗi ... chuyển sang đọc giao diện"
+      -> BÌNH THƯỜNG. Bot có 2 cách đọc lịch và đã tự chuyển
+         sang cách còn lại. Không cần làm gì.
+
+  * Bot dò lịch rất lâu, bấm qua từng nhóm/kênh
+      -> Đổi "Nguồn tìm cuộc họp" sang "Chỉ Lịch".
+
+  * Bot không thấy buổi học của bạn
+      -> Kiểm tra buổi đó có trên Lịch Outlook không, và có
+         đúng là "Cuộc họp Microsoft Teams" không.
+
+  * Chạy trên máy chủ / qua SSH (không có màn hình)
+      -> Mở config.json, đặt  "headless": true
+
+--------------------------------------------------------------
+BẢO MẬT
+--------------------------------------------------------------
+
+  File config.json (nằm cạnh file chạy) CHỨA MẬT KHẨU của bạn.
+  KHÔNG gửi file này cho ai, KHÔNG đẩy lên mạng.
+
+===============================================================
+  Mã nguồn & báo lỗi:
+  https://github.com/ntu168108/autoconnect-Teams-extention
+===============================================================

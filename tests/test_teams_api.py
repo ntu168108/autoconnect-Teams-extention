@@ -66,12 +66,21 @@ def test_malformed_teams_properties_does_not_break_the_scan():
     assert ev["cid"] is None
 
 
-def test_items_missing_a_start_or_subject_are_skipped():
+def test_items_missing_a_start_are_skipped():
     assert teams_api._parse_items([
         _item(Start=None),
-        _item(Subject=""),
         _item(Start="rác không phải ngày giờ"),
     ]) == []
+
+
+def test_an_event_with_no_subject_is_still_a_class_to_join():
+    # Outlook shows these as "(Không có chủ đề)". Dropping them meant the bot
+    # skipped a class that was happening right then and counted down to one
+    # four days away instead.
+    for subject in (None, "", "   "):
+        (ev,) = teams_api._parse_items([_item(Subject=subject)])
+        assert ev["title"] == "(Không có chủ đề)"
+        assert ev["cid"]          # still joinable via its own link
 
 
 def test_mixed_batch_keeps_only_the_usable_events():

@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import webbrowser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 
@@ -145,6 +146,7 @@ button.start svg{width:18px;height:18px;}
   border-radius:9px;margin-bottom:6px;font-size:13.5px;}
 .sched li .when{color:var(--muted);flex:none;}
 .sched li .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sched li.done{opacity:.5;}
 .btn-join{flex:none;padding:4px 11px;font-size:12px;font-weight:700;color:var(--on-accent);
   background:var(--accent);border:none;border-radius:7px;cursor:pointer;}
 .btn-join:hover{filter:brightness(1.08);}
@@ -366,7 +368,9 @@ function render(s) {{
       var when = document.createElement("span"); when.className = "when";
       when.textContent = d.toLocaleString("vi-VN", {{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"2-digit"}});
       li.appendChild(name); li.appendChild(when);
-      if (m.idx !== undefined && !stopped) {{
+      var ended = m.end && (m.end * 1000 < Date.now() - clockOff * 1000);
+      if (ended) li.classList.add("done");
+      if (m.idx !== undefined && !stopped && !ended) {{
         var btn = document.createElement("button");
         btn.className = "btn-join"; btn.textContent = "Vào ngay";
         btn.onclick = function() {{
@@ -397,11 +401,26 @@ function render(s) {{
     return "[" + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) + "] " + l.msg;
   }}).join("\\n");
   if (atBottom) box.scrollTop = box.scrollHeight;
-  if (s.state === "stopped") {{
+  if (s.state === "stopped" && !stopped) {{
     stopped = true;
     document.getElementById("dot").style.animation = "none";
-    document.getElementById("btn-stop").disabled = true;
-    document.getElementById("btn-stop").textContent = "Bot đã dừng — có thể đóng cửa sổ này";
+    var btn = document.getElementById("btn-stop");
+    btn.disabled = true;
+    // Give the user a moment to read the last log lines, then clear the
+    // window away. If the browser refuses to close it, say so rather than
+    // leaving a button that looks like it still does something.
+    var left = 5;
+    btn.textContent = "Bot đã dừng — tự đóng sau " + left + "s";
+    var t = setInterval(function() {{
+      left -= 1;
+      if (left > 0) {{
+        btn.textContent = "Bot đã dừng — tự đóng sau " + left + "s";
+        return;
+      }}
+      clearInterval(t);
+      btn.textContent = "Bot đã dừng — có thể đóng cửa sổ này";
+      window.close();
+    }}, 1000);
   }}
 }}
 
@@ -417,7 +436,7 @@ function poll() {{
 setInterval(poll, 2000); poll();
 
 document.getElementById("btn-stop").onclick = function() {{
-  if (!confirm("Dừng bot? Bot sẽ rời lớp (nếu đang trong lớp) và đóng Chrome.")) return;
+  if (!confirm("Dừng bot? Bot sẽ rời lớp (nếu đang trong lớp), đóng Chrome và đóng luôn cửa sổ này.")) return;
   fetch("/api/stop", {{method: "POST"}});
   this.disabled = true; this.textContent = "Đang dừng…";
 }};
@@ -490,6 +509,14 @@ class _Handler(BaseHTTPRequestHandler):
                                  "error": "Buổi học không còn trong lịch"})
                 return
             entry = rt.schedule[idx]
+            # The list on the dashboard keeps past classes, so the click may be
+            # for one that has already finished. Accepting it would mark the
+            # class handled and then compute a join deadline in the past, so
+            # the bot would never even attempt it — refuse plainly instead.
+            end = entry.get("end")
+            if end is not None and end <= datetime.now():
+                self._send_json({"ok": False, "error": "Buổi học này đã kết thúc"})
+                return
             rt.join_request = entry
             status.log(f"Đã nhận yêu cầu vào lớp ngay: {entry['title']}")
             self._send_json({"ok": True})
@@ -595,6 +622,10 @@ def _find_browser():
 # Unique marker in the setup window's command line (its --user-data-dir).
 _SETUP_PROFILE_MARKER = "taj_setup_profile"
 
+# Width reserved for the dashboard window on the left of the screen. browser.py
+# reads this to place the window it drives beside it instead of on top of it.
+DASHBOARD_WIDTH = 620
+
 
 def _open_app_window(url):
     """Open the form in a dedicated Chrome/Edge app window (no tabs/address bar)."""
@@ -607,7 +638,11 @@ def _open_app_window(url):
         f"--user-data-dir={profile}",
         "--no-first-run",
         "--no-default-browser-check",
-        "--window-size=640,960",
+        # Pin the dashboard to the left edge; browser.init_browser() then puts
+        # the window it drives to the right of DASHBOARD_WIDTH, so joining a
+        # class does not bury the dashboard the user is watching.
+        f"--window-size={DASHBOARD_WIDTH},960",
+        "--window-position=0,0",
     ]
     try:
         if mode == "mac_app":
@@ -623,6 +658,39 @@ def _open_app_window(url):
 
 
 _server = None
+
+
+def close_app_window():
+    """Close the dashboard window this run opened, and stop the local server.
+
+    The page closes its own window as soon as the bot reports 'stopped', but
+    Chrome itself lingers after its last window on macOS, and the close can be
+    refused outright — so also terminate whatever still carries our unique
+    --user-data-dir marker. That marker only ever belongs to this app's own
+    setup window, so nothing else can match it."""
+    if sys.platform == "win32":
+        # taskkill can only filter on image name or window title, and the
+        # marker lives in the command line — so ask PowerShell instead.
+        cmd = ["powershell", "-NoProfile", "-Command",
+               "Get-CimInstance Win32_Process -Filter "
+               f"\"CommandLine LIKE '%{_SETUP_PROFILE_MARKER}%'\""
+               " | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"]
+    else:
+        cmd = ["pkill", "-f", _SETUP_PROFILE_MARKER]
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=10)
+    except Exception:
+        pass
+
+    global _server
+    if _server is not None:
+        try:
+            _server.shutdown()
+            _server.server_close()
+        except Exception:
+            pass
+        _server = None
 
 
 def run_setup_gui(open_browser=True):
