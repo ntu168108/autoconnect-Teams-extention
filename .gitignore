@@ -16,6 +16,14 @@ dumps/
 dumps.zip
 dumps_extracted/
 
+# Bản thu thập lưu lượng mạng: chứa token đăng nhập, email, ID cuộc họp,
+# tên người trong lớp — KHÔNG BAO GIỜ đưa lên repo.
+*.har
+*.mitm
+*.saz
+*.pcap
+*.pcapng
+
 # Script gỡ lỗi tạm
 _*.py
 
