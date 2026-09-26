@@ -19,6 +19,8 @@
   "min_members": 3,
   "leave_threshold_number": -1,
   "leave_threshold_percentage": -1,
+  "leave_confirm_checks": 3,
+  "max_rejoins": 2,
   "check_interval": 10,
   "stale_after_hours": 3,
 

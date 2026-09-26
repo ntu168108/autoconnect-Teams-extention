@@ -35,6 +35,10 @@ DEFAULTS = {
     "min_members": 3,                # rời lớp khi số người < giá trị này (0 = tắt)
     "leave_threshold_number": -1,    # rời khi giảm >= N người so với đỉnh điểm (-1 = tắt)
     "leave_threshold_percentage": -1,  # rời khi còn < N% so với đỉnh điểm (-1 = tắt)
+    "leave_confirm_checks": 3,       # số lần đo liên tiếp phải cùng thấy lớp vắng mới rời
+    # Bị rớt khỏi lớp giữa buổi (mạng chập chờn, bị mời ra…) thì vào lại tối
+    # đa mấy lần cho mỗi buổi. Chỉ áp dụng khi biết giờ kết thúc (lịch qua API).
+    "max_rejoins": 2,                # 0 = không tự vào lại
 }
 
 

@@ -326,7 +326,10 @@ def join_meeting(meeting):
 _JS_ROSTER_BADGE_COUNT = r"""
 var btn = document.querySelector(arguments[0]);
 if (!btn) return null;
-var al = btn.getAttribute('aria-label') || '';
+// A keyboard shortcut in the label ("People (Ctrl+Shift+3)") also ends in a
+// digit; strip it so it is not taken for the headcount.
+var al = (btn.getAttribute('aria-label') || '')
+  .replace(/(?:(?:ctrl|control|alt|option|shift|cmd|command|meta|win)\s*\+\s*)+\S+/gi, '');
 var m = al.match(/(\d+)\s*\)?\s*$/);
 if (m) return parseInt(m[1], 10);
 var badge = btn.querySelector('[data-tid$="badge"], .fui-Badge, [class*="badge" i]');
@@ -341,11 +344,17 @@ return null;
 # (works if the old class names are still around) or, failing that, count the
 # actual participant rows rendered in the panel — the row/list-item structure
 # tends to outlive specific className/data-tid renames.
+#
+# Sections of people who are NOT in the call are skipped: "Others invited"
+# grows exactly as the class leaves, so counting it keeps the total flat and
+# no leave rule could ever fire; the lobby is not in the class yet either.
 _JS_ROSTER_PANEL_COUNT = r"""
+var NOT_IN_CALL = /invited|mời|lobby|phòng chờ|phòng đợi|waiting|đang chờ|suggest|đề xuất/i;
 var total = 0, found = false;
 document.querySelectorAll("calling-roster-section .roster-list-title, [class*='roster'] [class*='list-title' i]")
   .forEach(function(el){
     var al = el.getAttribute('aria-label') || el.textContent || '';
+    if (NOT_IN_CALL.test(al)) return;
     var m = al.match(/\d+/);
     if (m) { total += parseInt(m[0], 10); found = true; }
   });
@@ -366,10 +375,10 @@ def get_meeting_members():
     it could not be determined (the caller must treat None as "unknown", not
     "zero" — never trigger a leave decision on it).
     """
-    # If the hangup button is gone, meeting ended
+    # No hang-up button, no roster to read. Whether the call is really over
+    # is for the caller to decide: it confirms that over two checks, and a
+    # verdict here would skip that.
     if wait_until_found(S.SEL_HANGUP, 3, print_error=False) is None:
-        rt.current_meeting = None
-        status.log("No longer in any meeting")
         return None
 
     try:
@@ -414,55 +423,76 @@ def hangup():
 
     try:
         hangup_btn = rt.browser.find_element(By.CSS_SELECTOR, S.SEL_HANGUP)
-        hangup_btn.click()
-        status.log(f"Left meeting: {rt.current_meeting.title}")
-        discord_notification("Left Meeting", rt.current_meeting.title)
-        rt.current_meeting = None
-        status.report("idle", detail="Đã rời lớp")
-        _cancel_auto_leave()
-        return True
     except exceptions.NoSuchElementException:
         return False
+    # Flagged before the click: the call can vanish (and be noticed by the
+    # schedule loop) while the lines below are still running, and it must be
+    # seen as our own leave, not as a drop to re-join.
+    rt.left_by_bot = True
+    # A JS click, like every other click here: a native one raises when a
+    # toast or side panel overlaps the button, and that error escaped to the
+    # schedule loop, which then dropped the class while still sitting in it.
+    rt.browser.execute_script("arguments[0].click()", hangup_btn)
+    status.log(f"Left meeting: {rt.current_meeting.title}")
+    discord_notification("Left Meeting", rt.current_meeting.title)
+    rt.current_meeting = None
+    status.report("idle", detail="Đã rời lớp")
+    _cancel_auto_leave()
+    return True
 
 
-def handle_leave_threshold(current_members, total):
-    status.log(f"Số người hiện tại: {current_members} / Đỉnh điểm: {total}")
+def _min_members():
+    """Absolute minimum headcount (default 3); 0 or negative disables it."""
+    try:
+        return int(rt.config.get("min_members", 3))
+    except (TypeError, ValueError):
+        return 3
+
+
+def leave_reason(current_members, total):
+    """Why the class should be left at this headcount, or None to stay.
+
+    `total` is the peak headcount seen so far. No rule applies until the class
+    has actually gathered — its peak reached the minimum headcount — because
+    the bot joins early: sitting alone, or with just the teacher, before the
+    students arrive is not the class emptying out. Leaving then lost the whole
+    class, since it is already marked handled and never re-joined."""
     # A count of 0 means the roster could not be read (we are in the call, so
     # there is always at least one person). Acting on it would divide by zero
     # in the percentage rule below, and would make every other rule fire and
     # drop us out of a class that is running perfectly well.
     if current_members <= 0 or total <= 0:
-        return False
+        return None
 
-    leave_num  = rt.config.get("leave_threshold_number")
-    leave_pct  = rt.config.get("leave_threshold_percentage")
-    # Absolute minimum headcount: leave once the class drops below this many
-    # people. Configurable (default 3); set to 0 (or negative) to disable —
-    # this replaces what used to be a hardcoded "< 3" rule.
-    min_members = rt.config.get("min_members", 3)
-    try:
-        min_members = int(min_members)
-    except (TypeError, ValueError):
-        min_members = 3
+    min_members = _min_members()
+    if total < max(min_members, 2):
+        return None
+
+    leave_num = rt.config.get("leave_threshold_number")
+    leave_pct = rt.config.get("leave_threshold_percentage")
 
     if leave_num and int(leave_num) > 0:
         if (total - current_members) >= int(leave_num):
-            status.log("Rời lớp: đã giảm quá số lượng tuyệt đối cấu hình")
-            discord_notification("Left meeting, threshold triggered", rt.current_meeting.title)
-            hangup()
-            return True
+            return "Rời lớp: đã giảm quá số lượng tuyệt đối cấu hình"
 
     if leave_pct and 0 < int(leave_pct) <= 100:
         if (current_members / total) * 100 < int(leave_pct):
-            status.log("Rời lớp: tỉ lệ người còn lại dưới ngưỡng cấu hình")
-            discord_notification("Left meeting, threshold triggered", rt.current_meeting.title)
-            hangup()
-            return True
+            return "Rời lớp: tỉ lệ người còn lại dưới ngưỡng cấu hình"
 
-    if min_members > 0 and 0 < current_members < min_members:
-        status.log(f"Rời lớp: chỉ còn {current_members} người (dưới mức tối thiểu {min_members})")
-        discord_notification("Left meeting, below minimum members", rt.current_meeting.title)
-        hangup()
-        return True
+    if min_members > 0 and current_members < min_members:
+        return (f"Rời lớp: chỉ còn {current_members} người "
+                f"(dưới mức tối thiểu {min_members})")
 
-    return False
+    return None
+
+
+def handle_leave_threshold(current_members, total):
+    """Leave if a leave rule applies. True only if we actually left — a
+    hang-up that did not go through leaves us in the call, and reporting it
+    as done would send the schedule loop off with a stale current_meeting."""
+    reason = leave_reason(current_members, total)
+    if reason is None:
+        return False
+    status.log(reason)
+    discord_notification("Left meeting, threshold triggered", rt.current_meeting.title)
+    return hangup()

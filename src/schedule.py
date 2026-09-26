@@ -8,7 +8,8 @@ import runtime as rt
 import selectors_teams as S
 import status
 from browser import browser_dead, wait_until_found
-from joiner import get_meeting_members, handle_leave_threshold, join_meeting
+from joiner import (get_meeting_members, handle_leave_threshold, hangup,
+                    join_meeting, leave_reason)
 from models import Meeting
 from notify import discord_notification
 from scanner import _discover_calendar_events, discover_scheduled_meetings
@@ -33,10 +34,11 @@ def _fmt_td(td):
 
 def _sleep_or_join(seconds):
     """status.sleep_checked, but returns as soon as the user clicks 'Vào lớp
-    ngay' on the dashboard instead of sleeping out the full interval."""
+    ngay' (or 'Rời lớp') on the dashboard instead of sleeping out the full
+    interval."""
     end = time.time() + seconds
     while time.time() < end:
-        if rt.join_request is not None:
+        if rt.join_request is not None or rt.leave_request:
             return
         status.sleep_checked(min(1.0, max(end - time.time(), 0)))
 
@@ -145,29 +147,160 @@ def _countdown_until(meeting, join_at, max_seconds):
     return False
 
 
-def _stay_until_meeting_ends():
-    """Block while in a meeting; return when the call ends. Honors the optional
-    'leave_if_last' / leave-threshold settings while in the call."""
+def _switch_at(entry, join_before):
+    """When to leave `entry` for the class after it, or None if there is none.
+
+    That is the next class's own join time, except that an event overlapping
+    this one (a meeting in the middle of it, say) waits for this class's
+    scheduled end rather than cutting it short. Reads the scan taken just
+    before joining: scanning again from inside the call would navigate away
+    from it."""
+    later = [m for m in rt.schedule
+             if m["start"] > entry["start"] and _key(m) not in rt.handled]
+    if not later:
+        return None
+    nxt = min(later, key=lambda m: m["start"])
+    leave = max(nxt["start"], entry.get("end") or nxt["start"])
+    return leave - timedelta(minutes=join_before)
+
+
+# What _stay_until_meeting_ends reports when the call went away on its own —
+# a network drop, being removed, or the teacher ending the class — rather
+# than because the bot hung up.
+DROPPED = "dropped"
+
+
+def _leave_at(entry, join_before):
+    """(when, why) to leave `entry` of our own accord, or (None, None)."""
+    at = _switch_at(entry, join_before)
+    why = "Tới giờ vào buổi học kế tiếp — rời lớp hiện tại."
+    end = entry.get("end")
+    if _key(entry) in rt.rejoins and end is not None and (at is None or end < at):
+        # A re-join may have restarted a meeting the teacher had ended early,
+        # and nothing would ever end that one: stop at the class's own end.
+        at, why = end, "Hết giờ buổi học — rời lớp."
+    return at, why
+
+
+def _leave_now(why):
+    """Hang up on purpose, and make sure the loop can move on either way."""
+    status.log(why)
+    if not hangup():
+        # Joining the next class navigates away from this call anyway; a
+        # stale current_meeting would stop the join loop from even trying.
+        rt.left_by_bot = True
+        rt.current_meeting = None
+
+
+def _stay_until_meeting_ends(entry=None, join_before=0):
+    """Block while in a meeting. Returns DROPPED if the call ended on its own,
+    None if we left it: a leave rule fired, it was time for the next class,
+    or the user asked from the dashboard.
+
+    Without the next-class check a call the lecturer never ends — they just
+    walk off, and a few students linger — kept the bot in the old class
+    straight through the next one."""
     interval = max(int(rt.config.get('check_interval', 10) or 10), 3)
-    rt.total_members = 0
-    count = 0
+    # How many readings in a row must agree before a leave rule acts. One
+    # reading taken while the roster re-renders or the call reconnects can
+    # come back far too low, and acting on it drops a class that is fine.
+    confirm = max(int(rt.config.get('leave_confirm_checks', 3) or 3), 1)
+    leave_at, leave_why = (_leave_at(entry, join_before) if entry is not None
+                           else (None, None))
+    key = _key(entry) if entry is not None else None
+    # Back in after a drop, the class has already gathered: keep its peak, so
+    # coming back to an emptied room reads as the class having emptied.
+    rt.total_members = rt.peaks.get(key, 0)
+    rt.left_by_bot = False
+    rt.leave_request = False       # a click meant for the previous class
+    last_members = None
+    streak = 0
+    missing = 0
     while rt.current_meeting is not None:
         status.check_stop()
         if wait_until_found(S.SEL_HANGUP, 5, print_error=False) is None:
-            status.log("Đã rời lớp / lớp đã kết thúc.")
+            # Missing once is not enough: a reconnect or a re-render can hide
+            # the toolbar for a moment, and calling that the end loses the class.
+            missing += 1
+            if missing < 2 and not rt.left_by_bot:
+                continue
             rt.current_meeting = None
-            return
+            if rt.left_by_bot:        # we hung up (the auto-leave timer), or meant to
+                return None
+            status.log("Đã rời lớp / lớp đã kết thúc.")
+            return DROPPED
+        missing = 0
+        if rt.leave_request:
+            rt.leave_request = False
+            _leave_now("Rời lớp theo yêu cầu từ bảng theo dõi.")
+            return None
+        if rt.join_request is not None:
+            _leave_now("Rời lớp hiện tại để vào buổi bạn vừa chọn trên bảng theo dõi.")
+            return None
+        if leave_at is not None and datetime.now() >= leave_at:
+            _leave_now(leave_why)
+            return None
         if rt.config.get('leave_if_last'):
             members = get_meeting_members()
-            if rt.current_meeting is None:
-                return
-            if members and members > rt.total_members:
-                rt.total_members = members
-            if count % 5 == 0 and count > 0 and members is not None:
-                if handle_leave_threshold(members, rt.total_members):
-                    return
-        count += 1
-        status.sleep_checked(interval)
+            if rt.current_meeting is None:     # the auto-leave timer hung up
+                return None
+            # None is "could not read", not a headcount: it neither confirms
+            # nor clears a pending leave.
+            if members is not None:
+                rt.total_members = max(rt.total_members, members)
+                if key is not None:
+                    rt.peaks[key] = rt.total_members
+                if members != last_members:
+                    status.log(f"Số người hiện tại: {members} / "
+                               f"Đỉnh điểm: {rt.total_members}")
+                    last_members = members
+                streak = streak + 1 if leave_reason(members, rt.total_members) else 0
+                if streak >= confirm:
+                    # From here on we mean to leave. If the hang-up does not
+                    # go through we keep watching and retry, and should the
+                    # call vanish meanwhile, that is our leave, not a drop to
+                    # re-join — going back in would undo the rule.
+                    rt.left_by_bot = True
+                    if handle_leave_threshold(members, rt.total_members):
+                        return None
+        _sleep_or_join(interval)
+    return None
+
+
+def _may_rejoin(entry, now):
+    """Whether to go back into a class whose call dropped on its own.
+
+    Only while the class still has a good while left by its scheduled end —
+    known for classes read through the calendar API — and only a couple of
+    times: a teacher ending class early makes the call vanish the same way,
+    and each re-join then just restarts an empty meeting."""
+    end = entry.get("end")
+    if end is None or now >= end - timedelta(minutes=10):
+        return False
+    try:
+        limit = int(rt.config.get("max_rejoins", 2))
+    except (TypeError, ValueError):
+        limit = 2
+    return rt.rejoins.get(_key(entry), 0) < limit
+
+
+def _rearm_after_drop(entry, outcome, now):
+    """Put a class whose call dropped mid-class back up for joining. Returns
+    True if it will be re-joined.
+
+    Marking a class handled up front is what keeps us from re-joining one we
+    chose to leave; a call that dropped out from under us is not that, so the
+    next pass may pick it up again — it is still running, so it comes first."""
+    if outcome != DROPPED or not _may_rejoin(entry, now):
+        return False
+    k = _key(entry)
+    rt.rejoins[k] = rt.rejoins.get(k, 0) + 1
+    rt.handled.discard(k)
+    status.report("idle", detail="Bị rớt khỏi lớp — đang vào lại…")
+    status.log(f"Bị rớt khỏi lớp khi buổi học chưa hết giờ — vào lại "
+               f"(lần {rt.rejoins[k]}).")
+    discord_notification("Bị rớt khỏi lớp, đang vào lại", entry["title"])
+    return True
 
 
 def run_schedule_loop():
@@ -246,6 +379,7 @@ def run_schedule_loop():
 
         # ── Time to join ───────────────────────────────────────────────────
         rt.handled.add(_key(nxt))  # don't re-pick this session after we leave it
+        rt.current_entry = nxt
         status.report("joining", title=nxt["title"], detail="Đang vào lớp…")
         if manual is not None:
             status.log(f"▶ Vào lớp theo yêu cầu từ bảng theo dõi: {nxt['title']}")
@@ -315,11 +449,13 @@ def run_schedule_loop():
             rt.joining = False
 
         if rt.current_meeting is None:
+            rt.current_entry = None
             status.log("Không vào được lớp (quá giờ). Tìm buổi tiếp theo.")
             continue
 
+        outcome = None
         try:
-            _stay_until_meeting_ends()
+            outcome = _stay_until_meeting_ends(nxt, join_before)
         except status.BotStopped:
             raise
         except Exception as e:
@@ -329,5 +465,10 @@ def run_schedule_loop():
             # meeting and go back to scanning for the next class.
             status.log(f"Lỗi khi đang trong lớp: {_short_err(e)}")
             rt.current_meeting = None
+        finally:
+            rt.current_entry = None
+
+        if _rearm_after_drop(nxt, outcome, datetime.now()):
+            continue
         status.report("idle", detail="Đã rời lớp — đang kiểm tra buổi học tiếp theo…")
         status.log("Đã rời lớp. Đang kiểm tra lịch xem có buổi học tiếp theo không…")

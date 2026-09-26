@@ -11,6 +11,12 @@ Then in the browser: log in -> navigate to the screen you want to inspect
 (channel with meeting, calendar, pre-join screen, in-call controls)
 -> switch back to terminal and press Enter to capture. Type 'q' then Enter to quit.
 
+Checking the headcount the "leave when the class empties" rule relies on:
+capture once inside a class with the People panel CLOSED, and once with it
+OPEN. Each capture prints the count the bot would read, to compare with the
+number Teams itself shows; the raw roster elements go into .candidates.json
+under "roster".
+
 Output goes to:  dumps/NN_<label>.html  +  .png  +  .candidates.json
 """
 
@@ -18,10 +24,14 @@ import json
 import os
 import sys
 
-# Allow running from repo root: add src/ to path so auto_joiner can be imported
+# Allow running from repo root: add src/ to path so the bot's modules import
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import auto_joiner
+import config as config_mod
+import joiner
+import runtime as rt
+import selectors_teams as S
+from browser import init_browser
 from selenium.webdriver.common.by import By
 
 DUMP_DIR = "dumps"
@@ -60,6 +70,49 @@ return out;
 """
 
 
+# The roster button, and anything in an open People panel that looks like a
+# section title or a participant row — what the bot's headcount comes from.
+ROSTER_JS = r"""
+var out = {button: null, titles: [], rows: {}};
+var btn = document.querySelector(arguments[0]);
+if (btn) out.button = {
+  ariaLabel: btn.getAttribute('aria-label') || '',
+  title: btn.getAttribute('title') || '',
+  text: (btn.innerText || '').trim(),
+  html: btn.outerHTML.slice(0, 800)
+};
+document.querySelectorAll(
+    "[class*='roster' i] [class*='title' i], [data-tid*='roster' i], [role='heading']")
+  .forEach(function(el){
+    if (out.titles.length >= 40) return;
+    out.titles.push({
+      dataTid: el.getAttribute('data-tid') || '',
+      role: el.getAttribute('role') || '',
+      ariaLabel: el.getAttribute('aria-label') || '',
+      text: (el.innerText || el.textContent || '').trim().slice(0, 120)
+    });
+  });
+["[role='listitem']", "[role='treeitem']", "[data-tid^='roster-list-item']"]
+  .forEach(function(sel){ out.rows[sel] = document.querySelectorAll(sel).length; });
+return out;
+"""
+
+
+def roster_report(browser):
+    """The headcount the bot would read on this screen, next to the raw
+    elements it reads it from."""
+    out = {}
+    for name, script, args in (
+            ("bot_badge_count", joiner._JS_ROSTER_BADGE_COUNT, (S.SEL_ROSTER,)),
+            ("bot_panel_count", joiner._JS_ROSTER_PANEL_COUNT, ()),
+            ("elements", ROSTER_JS, (S.SEL_ROSTER,))):
+        try:
+            out[name] = browser.execute_script(script, *args)
+        except Exception as e:
+            out[name] = f"<err {str(e).splitlines()[0]}>"
+    return out
+
+
 def capture(browser, n, label, outdir=DUMP_DIR):
     os.makedirs(outdir, exist_ok=True)
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (label or "snap"))
@@ -81,9 +134,15 @@ def capture(browser, n, label, outdir=DUMP_DIR):
 
     try:
         candidates = browser.execute_script(CANDIDATE_JS)
+        roster = roster_report(browser)
         report = {"url": browser.current_url, "title": browser.title,
                   "candidate_count": len(candidates), "candidates": candidates,
-                  "iframes": []}
+                  "roster": roster, "iframes": []}
+        elements = roster.get("elements")
+        if isinstance(elements, dict) and elements.get("button"):
+            print(f"  -> số người bot đọc được: từ nút = {roster['bot_badge_count']}, "
+                  f"từ bảng Người = {roster['bot_panel_count']} "
+                  "(so với con số Teams đang hiện)")
 
         # The new Teams calendar is an Outlook page embedded in an iframe, so the
         # event tiles and the Join button live INSIDE that iframe — scan each one.
@@ -120,10 +179,10 @@ def capture(browser, n, label, outdir=DUMP_DIR):
 
 
 def main():
-    auto_joiner.load_config()
-    auto_joiner.config["headless"] = False
-    auto_joiner.init_browser()
-    browser = auto_joiner.browser
+    rt.config = config_mod.load()
+    rt.config["headless"] = False
+    init_browser()
+    browser = rt.browser
     browser.get("https://teams.microsoft.com")
 
     print("\n" + "=" * 70)
