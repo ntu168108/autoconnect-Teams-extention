@@ -29,6 +29,7 @@
 - [Cách hoạt động](#cách-hoạt-động)
 - [Khắc phục sự cố](#khắc-phục-sự-cố)
 - [Dành cho người phát triển](#dành-cho-người-phát-triển)
+- [Giấy phép](#giấy-phép)
 - [Star History](#star-history)
 
 ---
@@ -42,6 +43,8 @@
 - Tự vào họp với **camera & mic đã tắt sẵn**
 - **Nút "Vào ngay"** trên bảng theo dõi: bấm là vào thẳng buổi đó, không cần chờ đếm ngược
 - *(Tùy chọn)* Tự **rời lớp khi lớp vắng** (dưới số người tối thiểu bạn đặt) rồi **tự chờ buổi kế tiếp**
+- **Bị rớt khỏi lớp giữa buổi** (mạng chập chờn…) thì **tự vào lại**, miễn buổi học chưa hết giờ
+- Lớp cũ chưa tan mà **tới giờ buổi kế tiếp** thì **tự chuyển sang** buổi mới
 - *(Tùy chọn)* Tự **gửi lời nhắn** vào **chat phòng họp** khi vào
 - *(Tùy chọn)* Tự **rời họp** sau X phút
 - **Giao diện cấu hình bằng web**, có chế độ **Sáng / Tối** — không cần sửa file tay
@@ -112,11 +115,11 @@ Script sẽ tự kiểm tra Python, thư viện và trình duyệt trước khi 
 | **Vào lớp sớm (phút)** | `0` = đúng giờ. Bot đếm ngược rồi tự vào. |
 | **Chạy ẩn (headless)** | Chạy ngầm, không hiện cửa sổ trình duyệt. |
 | **Tắt loa trình duyệt** | Tắt âm thanh phát ra từ trình duyệt (không ảnh hưởng mic của bạn). |
-| **Tự rời họp sau (phút)** | `-1` = không tự rời, ở lại tới khi có họp mới. |
+| **Tự rời họp sau (phút)** | `-1` = không tự rời: ở lại tới khi lớp kết thúc, hoặc tới giờ vào buổi kế tiếp thì tự chuyển sang. |
 | **Khoảng quét lại (giây)** | Tần suất kiểm tra cuộc họp mới. |
 | **Lời nhắn khi vào họp** | Tin tự gửi vào chat phòng họp (để trống = không gửi). |
 | **Tự rời khi lớp vắng** | Bật để bot theo dõi số người trong lớp. |
-| **Số người tối thiểu** | Rời lớp khi còn ít hơn số này (`0` = tắt). Rời xong bot tự chờ buổi kế tiếp. |
+| **Số người tối thiểu** | Rời lớp khi còn ít hơn số này (`0` = tắt). Chỉ xét **sau khi lớp đã từng đông tới mức này** (vào sớm lúc lớp chưa ai tới thì không rời), và phải thấy vắng **3 lần đo liên tiếp** (`leave_confirm_checks`). Rời xong bot tự chờ buổi kế tiếp. |
 | **Discord webhook** | *(Tùy chọn)* Gửi thông báo trạng thái qua Discord. |
 
 Các tùy chọn nâng cao (bỏ qua kênh, đa tổ chức, múi giờ…) chỉnh trực tiếp trong `config.json` — xem `config.json.example`.
@@ -133,7 +136,8 @@ Sau khi bấm **Bắt đầu**, cửa sổ cấu hình chuyển thành bảng th
 |---|---|
 | **Đồng hồ đếm ngược** | Còn bao lâu tới lúc bot tự vào lớp |
 | **Lịch đã dò được** | Các buổi học bot tìm thấy. Buổi đã tan bị làm mờ. |
-| **Nút "Vào ngay"** | Vào thẳng buổi đó, không cần chờ đếm ngược |
+| **Nút "Vào ngay"** | Vào thẳng buổi đó, không cần chờ đếm ngược. Đang trong lớp khác thì bot rời lớp đó rồi chuyển sang. |
+| **Nút "Rời lớp"** | Chỉ hiện khi đang trong lớp. Rời buổi hiện tại (không tự vào lại buổi đó) rồi chờ buổi kế tiếp |
 | **Nhật ký hoạt động** | Bot đang làm gì — xem đây trước tiên khi có gì đó lạ |
 | **Nút "Dừng bot"** | Rời lớp, đóng Chrome, rồi tự đóng luôn cửa sổ này |
 
@@ -160,6 +164,8 @@ Bot mở 2 cửa sổ nằm **cạnh nhau**: bảng theo dõi bên trái, cửa 
 │  5. Vào lớp → tắt camera & mic → gửi lời nhắn (nếu đặt)  │
 │              ↓                                            │
 │  6. Ở trong lớp; nếu bật, rời khi lớp vắng dần            │
+│     • Tới giờ buổi kế tiếp mà lớp cũ chưa tan → tự chuyển │
+│     • Bị rớt giữa buổi → tự vào lại (tối đa 2 lần/buổi)   │
 │              ↓                                            │
 │  7. Rời xong → quay lại bước 2 tìm buổi kế tiếp           │
 └──────────────────────────────────────────────────────────┘
@@ -242,6 +248,28 @@ Outlook, chọn **`Chỉ Lịch`** — nhanh hơn rất nhiều.
 </details>
 
 <details>
+<summary><b>Bot rời lớp quá sớm, hoặc lớp vắng rồi mà không rời</b></summary>
+
+Tính năng **Tự rời khi lớp vắng** dựa vào số người bot đếm được. Xem các dòng
+`Số người hiện tại: … / Đỉnh điểm: …` trong Nhật ký:
+
+- Bot **không** rời khi lớp chưa từng đông tới **Số người tối thiểu** — vào sớm
+  lúc lớp mới có mình bạn là bình thường, bot chờ lớp đông lên.
+- Bot chỉ rời khi thấy lớp vắng ở **3 lần đếm liên tiếp** (chỉnh bằng
+  `leave_confirm_checks` trong `config.json`).
+- Nếu con số trong Nhật ký **khác** với số Teams hiện, Teams vừa đổi giao diện —
+  xem mục *Kiểm tra cách bot đếm số người* bên dưới.
+</details>
+
+<details>
+<summary><b>Bị rớt mạng giữa buổi</b></summary>
+
+Bot tự vào lại (tối đa 2 lần mỗi buổi) nếu buổi học **chưa hết giờ** theo Lịch.
+Muốn tắt: đặt `"max_rejoins": 0` trong `config.json`. Buổi học đọc từ **kênh**
+(không có giờ kết thúc) thì bot không tự vào lại.
+</details>
+
+<details>
 <summary><b>Nút bấm bị lỗi sau khi Teams cập nhật</b></summary>
 
 Microsoft thường xuyên đổi UI — xem mục **Dành cho người phát triển** bên dưới để cập nhật selector.
@@ -258,6 +286,8 @@ python tools/inspect_teams.py
 ```
 
 Đăng nhập, điều hướng đến màn hình cần, gõ **Enter** để lưu **HTML + screenshot + danh sách nút bấm** vào `dumps/`, rồi cập nhật selector trong `src/selectors_teams.py`.
+
+**Kiểm tra cách bot đếm số người trong lớp** (tính năng tự rời khi lớp vắng dựa vào con số này): trong một buổi học, chụp một lần khi bảng **Người** đang đóng và một lần khi đang mở. Mỗi lần chụp, terminal in ra số người bot đọc được — so với con số Teams đang hiện. Phần tử gốc nằm trong mục `"roster"` của file `.candidates.json`.
 
 | File | Vai trò |
 |---|---|
@@ -276,11 +306,18 @@ python tools/inspect_teams.py
 | `tools/inspect_teams.py` | Công cụ debug & chụp DOM |
 | `run.bat` / `run.sh` | Khởi động từ mã nguồn (`run.command` gọi vào `run.sh`) |
 | `build_local.bat` / `build_local.sh` | Build file chạy 1-click bằng PyInstaller |
-| `tests/` | 74 test — chạy bằng `python3 -m pytest tests/` |
+| `tests/` | 117 test — chạy bằng `python3 -m pytest tests/` |
+| `CHANGELOG.md` | Nhật ký thay đổi — mục của từng phiên bản thành ghi chú Release |
 | `.github/workflows/release.yml` | Tự build & đăng Releases khi push tag `v*` |
 | `config.json.example` | Mẫu cấu hình đầy đủ tất cả tùy chọn |
 
-**Phát hành bản mới:** sửa code → commit → `git tag v1.x.x` → `git push origin main --tags` — GitHub Actions tự build cả 2 nền tảng và đăng lên Releases.
+**Phát hành bản mới:** sửa code → thêm mục `## v1.x.x — ngày` vào đầu `CHANGELOG.md` → commit → `git tag v1.x.x` → `git push origin main --tags` — GitHub Actions tự build cả 3 nền tảng (Windows / macOS / Linux) và đăng lên Releases, lấy mục đó trong `CHANGELOG.md` làm ghi chú phát hành.
+
+---
+
+## Giấy phép
+
+Phát hành theo giấy phép **GNU GPL v3.0** — xem file [`LICENSE`](LICENSE).
 
 ---
 

@@ -98,8 +98,21 @@ jobs:
           chmod +x dist/chay-bot.sh dist/TeamsAutoJoiner
           cd dist && zip -r "../${{ matrix.zip }}" .
 
+      # The release notes are the CHANGELOG.md section headed "## <tag> — …".
+      # A tag without one gets an empty file, and the generated notes still
+      # go out on their own.
+      - name: Release notes
+        shell: bash
+        run: |
+          awk -v tag="$GITHUB_REF_NAME" '
+            /^## / { if (found) exit; found = ($2 == tag); next }
+            found
+          ' CHANGELOG.md > release-notes.md || true
+          touch release-notes.md
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.zip }}
+          body_path: release-notes.md
           generate_release_notes: true

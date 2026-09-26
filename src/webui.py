@@ -36,6 +36,7 @@ ICONS = {
     "check": '<path d="M20 6 9 17l-5-5"/>',
     "square": '<rect width="14" height="14" x="5" y="5" rx="2"/>',
     "activity": '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+    "log-out": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>',
 }
 
 
@@ -160,6 +161,13 @@ button.start svg{width:18px;height:18px;}
 .btn-stop:hover{filter:brightness(1.1);}
 .btn-stop:disabled{opacity:.5;cursor:default;}
 .btn-stop svg{width:17px;height:17px;}
+.btn-leave{display:flex;align-items:center;justify-content:center;gap:9px;margin:0 24px 10px;padding:11px;
+  font-size:15px;font-weight:700;color:var(--text);background:transparent;border:1.5px solid var(--border);
+  border-radius:11px;cursor:pointer;width:calc(100% - 48px);}
+.btn-leave[hidden]{display:none;}
+.btn-leave:hover{border-color:var(--accent);color:var(--accent);}
+.btn-leave:disabled{opacity:.5;cursor:default;}
+.btn-leave svg{width:17px;height:17px;}
 """
 
 THEME_HEAD = (
@@ -318,6 +326,7 @@ def _render_status_page():
   <div class="sched"><h3>Lịch đã dò được</h3><ul id="sched-list"><li>Chưa có dữ liệu</li></ul></div>
   <div class="sched"><h3>Nhật ký hoạt động</h3></div>
   <div class="logbox" id="logbox"></div>
+  <button class="btn-leave" id="btn-leave" hidden>{_icon("log-out")} Rời lớp</button>
   <button class="btn-stop" id="btn-stop">{_icon("square")} Dừng bot</button>
 </div>
 {TOGGLE_SCRIPT}
@@ -352,6 +361,10 @@ setInterval(tick, 500);
 
 function render(s) {{
   clockOff = Date.now()/1000 - s.now;
+  var inClass = s.state === "in_meeting";
+  var leaveBtn = document.getElementById("btn-leave");
+  leaveBtn.hidden = !inClass || stopped;
+  if (!inClass) {{ leaveBtn.disabled = false; leaveBtn.textContent = "Rời lớp"; }}
   joinAt = (s.state === "countdown") ? s.join_at : null;
   var line = STATE_VI[s.state] || s.state;
   if (s.title && (s.state === "countdown" || s.state === "in_meeting" || s.state === "joining"))
@@ -374,6 +387,7 @@ function render(s) {{
         var btn = document.createElement("button");
         btn.className = "btn-join"; btn.textContent = "Vào ngay";
         btn.onclick = function() {{
+          if (inClass && !confirm("Bot đang trong lớp. Rời lớp hiện tại để vào buổi này?")) return;
           btn.disabled = true; btn.textContent = "Đang vào…";
           fetch("/api/join", {{
             method: "POST",
@@ -435,6 +449,19 @@ function poll() {{
 }}
 setInterval(poll, 2000); poll();
 
+document.getElementById("btn-leave").onclick = function() {{
+  if (!confirm("Rời lớp hiện tại? Bot sẽ không tự vào lại buổi này, mà chờ buổi kế tiếp.")) return;
+  var btn = this;
+  btn.disabled = true; btn.textContent = "Đang rời…";
+  fetch("/api/leave", {{method: "POST"}}).then(function(r) {{ return r.json(); }})
+    .then(function(res) {{
+      if (!res.ok) {{
+        btn.disabled = false; btn.textContent = "Rời lớp";
+        alert(res.error || "Không gửi được yêu cầu rời lớp.");
+      }}
+    }}).catch(function() {{ btn.disabled = false; btn.textContent = "Rời lớp"; }});
+}};
+
 document.getElementById("btn-stop").onclick = function() {{
   if (!confirm("Dừng bot? Bot sẽ rời lớp (nếu đang trong lớp), đóng Chrome và đóng luôn cửa sổ này.")) return;
   fetch("/api/stop", {{method: "POST"}});
@@ -489,6 +516,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
             return
 
+        if path == "/api/leave":
+            if rt.current_meeting is None:
+                self._send_json({"ok": False, "error": "Bot đang không ở trong lớp nào"})
+                return
+            rt.leave_request = True
+            status.log("Đã nhận yêu cầu rời lớp từ trang theo dõi.")
+            self._send_json({"ok": True})
+            return
+
         if path == "/api/join":
             length = int(self.headers.get("Content-Length", 0))
             try:
@@ -497,9 +533,12 @@ class _Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, KeyError):
                 self._send_json({"ok": False, "error": "Yêu cầu không hợp lệ"})
                 return
-            if rt.current_meeting is not None or rt.joining:
+            # While in a class the click is still taken — the bot leaves it for
+            # the chosen one. Only an attempt still in flight is refused: its
+            # outcome is not known yet, so there is nothing to switch from.
+            if rt.joining and rt.current_meeting is None:
                 self._send_json({"ok": False,
-                                 "error": "Bot đang vào/đang trong lớp — hãy đợi hoặc rời lớp trước"})
+                                 "error": "Bot đang vào lớp — đợi chút rồi thử lại"})
                 return
             # Resolve to the class itself right now: a later rescan reorders
             # rt.schedule, so a stored index could end up pointing at a
@@ -516,6 +555,14 @@ class _Handler(BaseHTTPRequestHandler):
             end = entry.get("end")
             if end is not None and end <= datetime.now():
                 self._send_json({"ok": False, "error": "Buổi học này đã kết thúc"})
+                return
+            # Taking it would hang up on this very class, and then drop the
+            # request as a class already attended — leaving the bot out of it.
+            cur = rt.current_entry
+            if (cur is not None and rt.current_meeting is not None
+                    and cur.get("title") == entry.get("title")
+                    and cur.get("start") == entry.get("start")):
+                self._send_json({"ok": False, "error": "Bot đang ở trong buổi này rồi"})
                 return
             rt.join_request = entry
             status.log(f"Đã nhận yêu cầu vào lớp ngay: {entry['title']}")

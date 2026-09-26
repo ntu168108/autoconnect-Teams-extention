@@ -46,8 +46,25 @@ BƯỚC 3 — ĐỂ BOT CHẠY
   * ĐỪNG BẤM GÌ vào cửa sổ Teams bên phải — bot đang thao tác.
   * Cứ để cả hai cửa sổ mở. Bot sẽ tự đếm ngược và vào lớp.
   * Muốn vào ngay một buổi: bấm nút "Vào ngay" ở buổi đó.
+    Đang trong lớp khác cũng bấm được: bot rời lớp đó rồi chuyển sang.
+  * Muốn rời lớp đang học: bấm "Rời lớp" (chỉ hiện khi đang trong
+    lớp). Bot không vào lại buổi đó, mà chờ buổi kế tiếp.
   * Muốn dừng: bấm "Dừng bot" — bot rời lớp, đóng Chrome
     và tự đóng luôn bảng theo dõi.
+
+--------------------------------------------------------------
+TRONG LỚP BOT LÀM GÌ
+--------------------------------------------------------------
+
+  * Tới giờ buổi kế tiếp mà lớp cũ chưa tan: bot tự rời lớp cũ
+    và chuyển sang buổi mới.
+  * Bị rớt khỏi lớp giữa buổi (mạng rớt...): bot tự vào lại,
+    tối đa 2 lần mỗi buổi, nếu buổi học chưa hết giờ.
+  * (Tùy chọn) "Tự rời lớp khi lớp vắng dần" trong mục Nâng cao:
+    bot rời khi số người xuống dưới "Số người tối thiểu".
+    Bot chỉ xét SAU KHI lớp đã từng đông tới mức đó, nên vào sớm
+    lúc lớp còn vắng sẽ không bị rời. Phải thấy vắng 3 lần đếm
+    liên tiếp mới rời.
 
 --------------------------------------------------------------
 YÊU CẦU
@@ -78,6 +95,13 @@ GẶP TRỤC TRẶC?
 
   * Chạy trên máy chủ / qua SSH (không có màn hình)
       -> Mở config.json, đặt  "headless": true
+
+  * Bot rời lớp quá sớm / lớp vắng rồi mà không rời
+      -> Xem dòng "Số người hiện tại: ..." trong Nhật ký. Nếu con
+         số khác với số Teams hiện, báo lỗi kèm ảnh chụp màn hình.
+
+  * Không muốn bot tự vào lại khi bị rớt
+      -> Mở config.json, đặt  "max_rejoins": 0
 
 --------------------------------------------------------------
 BẢO MẬT
